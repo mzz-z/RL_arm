@@ -1,0 +1,43 @@
+# grasp.yaml - Phase 2 configuration (grasp + lift task)
+# Inherits from default.yaml, overrides specific values.
+
+env:
+  task_mode: "grasp"
+  max_episode_steps: 300      # More time for grasp + lift
+
+reward:
+  grasp:
+    w_dist: 1.0
+    attach_bonus: 2.0
+    w_lift: 1.0
+    w_hold_per_step: 0.1
+    success_bonus: 15.0
+
+ppo:
+  # May need more exploration for complex task
+  entropy_coef: 0.02
+
+# Curriculum for grasp (progressive difficulty)
+curriculum:
+  enabled: true
+  metric: "success_rate"
+  patience: 3
+
+  stages:
+    # Stage 1: Easy (close targets)
+    - threshold: 0.4
+      spawn:
+        radius_min: 0.20
+        radius_max: 0.28
+
+    # Stage 2: Medium
+    - threshold: 0.6
+      spawn:
+        radius_min: 0.15
+        radius_max: 0.35
+
+    # Stage 3: Full difficulty
+    - threshold: 0.8
+      spawn:
+        radius_min: 0.12
+        radius_max: 0.42

@@ -1,0 +1,36 @@
+# reach.yaml - Phase 1 configuration (reach task)
+# Inherits from default.yaml, overrides specific values.
+
+env:
+  task_mode: "reach"
+  max_episode_steps: 200
+
+reward:
+  reach:
+    w_dist: 1.0
+    success_bonus: 10.0
+
+# Curriculum for reach (progressive difficulty)
+curriculum:
+  enabled: true
+  metric: "success_rate"
+  patience: 3
+
+  stages:
+    # Stage 1: Easy (close targets)
+    - threshold: 0.5
+      spawn:
+        radius_min: 0.20
+        radius_max: 0.28
+
+    # Stage 2: Medium
+    - threshold: 0.7
+      spawn:
+        radius_min: 0.15
+        radius_max: 0.35
+
+    # Stage 3: Full difficulty
+    - threshold: 0.85
+      spawn:
+        radius_min: 0.12
+        radius_max: 0.42

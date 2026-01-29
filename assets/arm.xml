@@ -1,0 +1,100 @@
+<mujoco model="2dof_arm">
+  <!--
+    2-DOF planar arm operating in vertical x-z plane.
+    - Shoulder and elbow rotate around y-axis
+    - Arm can reach and lift in x-z plane
+    - Ball has freejoint for physics-based movement
+    - Weld constraint for grasp attachment
+  -->
+
+  <compiler angle="radian" coordinate="local"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicit">
+    <flag warmstart="enable"/>
+  </option>
+
+  <default>
+    <joint armature="0.01" damping="0.5" limited="true"/>
+    <geom contype="1" conaffinity="1" friction="0.5 0.1 0.1"/>
+    <position kp="50" ctrlrange="-2.5 2.5"/>
+  </default>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512"
+             rgb1="0.2 0.2 0.2" rgb2="0.3 0.3 0.3"/>
+    <material name="grid_mat" texture="grid" texrepeat="5 5" reflectance="0.1"/>
+    <material name="arm_mat" rgba="0.3 0.5 0.7 1"/>
+    <material name="table_mat" rgba="0.5 0.4 0.3 1"/>
+    <material name="ball_mat" rgba="1 0.2 0.2 1"/>
+  </asset>
+
+  <worldbody>
+    <!-- Ground plane -->
+    <geom name="ground" type="plane" size="2 2 0.1" material="grid_mat" conaffinity="1" contype="1"/>
+
+    <!-- Table -->
+    <body name="table" pos="0.3 0 0.4">
+      <geom name="table_top" type="box" size="0.4 0.4 0.02" material="table_mat"
+            conaffinity="1" contype="1" mass="10"/>
+    </body>
+
+    <!-- Arm base (fixed to world at table height) -->
+    <body name="arm_base" pos="0 0 0.42">
+      <geom name="base_geom" type="cylinder" size="0.03 0.02" rgba="0.2 0.2 0.2 1" mass="1"/>
+
+      <!-- Link 1 (upper arm) -->
+      <body name="link1" pos="0 0 0">
+        <!-- Shoulder joint: rotates in x-z plane around y-axis -->
+        <joint name="shoulder" type="hinge" axis="0 1 0" range="-2.0 2.0"
+               damping="0.5" armature="0.02"/>
+
+        <!-- Link 1 geometry - extends in +x direction when angle=0 -->
+        <geom name="link1_geom" type="capsule" fromto="0 0 0 0.25 0 0" size="0.02"
+              material="arm_mat" mass="0.5"/>
+
+        <!-- Link 2 (forearm) at end of link 1 -->
+        <body name="link2" pos="0.25 0 0">
+          <!-- Elbow joint: rotates in x-z plane around y-axis -->
+          <joint name="elbow" type="hinge" axis="0 1 0" range="-2.5 2.5"
+                 damping="0.3" armature="0.01"/>
+
+          <!-- Link 2 geometry -->
+          <geom name="link2_geom" type="capsule" fromto="0 0 0 0.25 0 0" size="0.018"
+                material="arm_mat" mass="0.3"/>
+
+          <!-- End-effector site at tip of link 2 -->
+          <site name="ee_site" pos="0.25 0 0" size="0.015" rgba="0 1 0 1"/>
+        </body>
+      </body>
+    </body>
+
+    <!-- Ball with freejoint (can move freely in 3D space) -->
+    <body name="ball" pos="0.3 0 0.45">
+      <freejoint name="ball_joint"/>
+      <geom name="ball_geom" type="sphere" size="0.03" material="ball_mat"
+            mass="0.05" friction="0.8 0.1 0.1" conaffinity="1" contype="1"/>
+    </body>
+  </worldbody>
+
+  <!-- Position actuators for stable control -->
+  <actuator>
+    <position name="shoulder_act" joint="shoulder" kp="50" ctrlrange="-2.0 2.0"/>
+    <position name="elbow_act" joint="elbow" kp="50" ctrlrange="-2.5 2.5"/>
+  </actuator>
+
+  <!-- Weld constraint for grasp (initially inactive) -->
+  <equality>
+    <weld name="grasp_weld" body1="ball" body2="link2" relpose="0.25 0 0 1 0 0 0" active="false"/>
+  </equality>
+
+  <!-- Sensors for observation (optional, data also accessible via data.qpos etc.) -->
+  <sensor>
+    <jointpos name="shoulder_pos" joint="shoulder"/>
+    <jointpos name="elbow_pos" joint="elbow"/>
+    <jointvel name="shoulder_vel" joint="shoulder"/>
+    <jointvel name="elbow_vel" joint="elbow"/>
+    <framepos name="ee_pos" objtype="site" objname="ee_site"/>
+    <framepos name="ball_pos" objtype="body" objname="ball"/>
+  </sensor>
+
+</mujoco>

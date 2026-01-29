@@ -1,0 +1,19 @@
+# Core dependencies for the 2-DOF arm RL project
+
+# Simulation
+mujoco>=3.0.0
+
+# RL environment
+gymnasium>=0.29.0
+
+# Numerical computation
+numpy>=1.24.0
+
+# Configuration
+pyyaml>=6.0
+
+# Deep learning (for RL module - to be implemented)
+torch>=2.0.0
+
+# Logging (for train_eval module - to be implemented)
+tensorboard>=2.14.0

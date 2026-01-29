@@ -1,0 +1,175 @@
+# default.yaml - Base configuration for all experiments
+# This file contains all parameters; phase configs override specific values.
+
+experiment:
+  run_name: null              # Auto-generate if null
+  seed: 42
+  device: "cuda"              # "cpu" or "cuda"
+
+  # Training duration
+  total_env_steps: 2_000_000
+
+  # Logging intervals
+  log_interval_updates: 10
+  eval_interval_updates: 50
+  checkpoint_interval_updates: 100
+
+  # Evaluation
+  num_eval_episodes: 20
+  eval_seeds: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109,
+               110, 111, 112, 113, 114, 115, 116, 117, 118, 119]
+
+  # Best model tracking
+  save_best_metric: "eval/success_rate"
+
+  # Video recording (optional)
+  record_video: false
+  video_interval_updates: 200
+
+env:
+  task_mode: "reach"          # "reach" or "grasp"
+  max_episode_steps: 200
+  frame_skip: 4               # Sim steps per env step
+  timestep: 0.002             # MuJoCo timestep (seconds)
+
+  # Arm configuration (vertical x-z plane)
+  arm:
+    link1_length: 0.25        # meters
+    link2_length: 0.25        # meters
+    base_height: 0.42         # Height of shoulder above ground
+
+  # Table
+  table_height: 0.4
+
+  # Ball
+  ball:
+    radius: 0.03
+    mass: 0.05
+
+  # Spawn parameters (ball position)
+  spawn:
+    radius_min: 0.15          # Min radial distance from base
+    radius_max: 0.40          # Max radial distance (< link1 + link2)
+    angle_min: -1.0           # Angular range (radians, 0 = forward)
+    angle_max: 1.0
+    y_min: -0.15              # Y-axis variation
+    y_max: 0.15
+
+  # Initial arm state
+  init_joints:
+    shoulder_range: [-0.3, 0.3]
+    elbow_range: [-0.3, 0.3]
+    vel_noise_std: 0.01
+
+  # Reach task parameters (Phase 1)
+  reach:
+    reach_radius: 0.05        # Success distance threshold (meters)
+    dwell_steps: 5            # Steps within radius to succeed
+    ee_vel_threshold: 0.1     # Max ee velocity for success (m/s)
+
+  # Magnet grasp parameters (Phase 2)
+  magnet:
+    attach_radius: 0.04       # Distance to trigger attachment
+    attach_vel_threshold: 0.15  # Max ee velocity to attach
+
+  # Lift/hold parameters (Phase 2)
+  lift:
+    lift_height: 0.1          # Height above table for success
+    hold_steps: 10            # Steps at height to succeed
+
+  # Termination conditions
+  termination:
+    ball_fell_threshold: -0.05  # Ball z below table - this value
+    unreachable_margin: 0.1     # Dist > max_reach + margin
+
+control:
+  mode: "position_target"
+  action_scale: 0.1           # Radians per env step (CRITICAL)
+  clip_action: true           # Clip actions to [-1, 1]
+
+  # Optional rate limiting
+  rate_limit:
+    enabled: false
+    max_delta: 0.15           # Max target change per step (rad)
+
+  # Optional low-pass smoothing
+  lowpass:
+    enabled: false
+    alpha: 0.3                # Smoothing factor
+
+  # Joint limits (radians)
+  joint_limits:
+    shoulder: [-2.0, 2.0]
+    elbow: [-2.5, 2.5]
+
+reward:
+  # Normalization
+  normalize_distance: true    # Divide distance by max_reach
+
+  # Smoothness penalties
+  w_action_mag: 0.01          # Penalty on ||action||^2
+  w_action_change: 0.005      # Penalty on ||action - prev_action||^2
+  w_joint_vel: 0.0            # Optional penalty on joint velocities
+
+  # Phase 1: Reach
+  reach:
+    w_dist: 1.0               # Weight on (normalized) distance
+    success_bonus: 10.0       # Bonus for completing reach task
+
+  # Phase 2: Grasp/Lift
+  grasp:
+    w_dist: 1.0               # Pre-attach distance weight
+    attach_bonus: 2.0         # One-time bonus for attachment
+    w_lift: 1.0               # Weight on (normalized) lift height
+    w_hold_per_step: 0.1      # Bonus per step at lift height
+    success_bonus: 15.0       # Bonus for completing lift/hold
+
+ppo:
+  # Learning rate with scheduling
+  lr: 3.0e-4
+  lr_schedule: "linear"       # "linear", "cosine", or "constant"
+  lr_min: 0.0                 # Minimum LR for cosine schedule
+
+  # Discount and advantage
+  gamma: 0.99
+  gae_lambda: 0.95
+
+  # PPO clipping
+  clip_range: 0.2
+
+  # Loss coefficients
+  entropy_coef: 0.01
+  value_coef: 0.5
+
+  # Optimization
+  max_grad_norm: 0.5
+
+  # Rollout collection
+  rollout_steps: 2048         # Steps per env per update
+  num_envs: 8                 # Parallel environments (CRITICAL)
+
+  # Update epochs
+  minibatch_size: 64
+  epochs_per_update: 10
+
+model:
+  # Network architecture
+  hidden_sizes: [256, 256]
+  activation: "relu"          # "relu", "tanh", "elu"
+
+  # Action distribution
+  log_std_init: 0.0           # Initial log-std (std = 1.0)
+  log_std_min: -20            # Clamp for numerical stability
+  log_std_max: 2
+
+  # Observation normalization
+  obs_norm:
+    enabled: true
+    epsilon: 1.0e-8
+    clip: 10.0                # Clip normalized obs to [-clip, clip]
+
+curriculum:
+  enabled: false              # Set true to enable curriculum
+  metric: "success_rate"      # Metric to track for advancement
+  patience: 3                 # Evals above threshold before advancing
+  stages: []
