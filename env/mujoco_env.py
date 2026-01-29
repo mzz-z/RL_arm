@@ -200,6 +200,28 @@ class MujocoArmEnv(gym.Env):
         """
         self.controller = controller
 
+    def create_controller_from_config(self, control_config: dict):
+        """
+        Create and set a controller from config dict.
+
+        This is a convenience method that creates a PositionTargetController
+        using the environment's validated joint limits and the provided config.
+
+        Args:
+            control_config: Control configuration dict with keys:
+                - action_scale: float (radians per env step)
+                - rate_limit: dict with 'enabled' and 'max_delta'
+                - lowpass: dict with 'enabled' and 'alpha'
+
+        Returns:
+            The created controller instance
+        """
+        from control.controllers import create_controller
+
+        controller = create_controller(control_config, self.ids["joint_limits"])
+        self.set_controller(controller)
+        return controller
+
     def reset(
         self,
         *,
@@ -433,6 +455,10 @@ class MujocoArmEnv(gym.Env):
 
         # Add task-specific state
         info.update(self.task.get_state())
+
+        # Add controller debug info
+        if self.controller is not None and hasattr(self.controller, "get_debug_info"):
+            info.update(self.controller.get_debug_info())
 
         return info
 

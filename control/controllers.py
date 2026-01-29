@@ -158,6 +158,33 @@ class PositionTargetController:
             "elbow": (self.q_min[1], self.q_max[1]),
         }
 
+    def get_debug_info(self) -> dict:
+        """
+        Get controller state for debug/logging info dict.
+
+        Returns:
+            Dictionary with controller state (q_target, joint limits, config)
+        """
+        info = {
+            "ctrl_q_target": self.q_target.copy() if self.q_target is not None else None,
+            "ctrl_action_scale": self.action_scale,
+        }
+
+        # Add config info
+        if self.rate_limit.enabled:
+            info["ctrl_rate_limit_enabled"] = True
+            info["ctrl_rate_limit_max_delta"] = self.rate_limit.max_delta
+        else:
+            info["ctrl_rate_limit_enabled"] = False
+
+        if self.lowpass.enabled:
+            info["ctrl_lowpass_enabled"] = True
+            info["ctrl_lowpass_alpha"] = self.lowpass.alpha
+        else:
+            info["ctrl_lowpass_enabled"] = False
+
+        return info
+
 
 def create_controller(config: dict, joint_limits: dict) -> PositionTargetController:
     """
