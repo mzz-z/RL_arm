@@ -370,6 +370,10 @@ def train(
     num_eval_episodes = experiment_config.get("num_eval_episodes", 20)
     eval_seeds = experiment_config.get("eval_seeds", list(range(100, 120)))
 
+    # Video recording parameters
+    record_video = experiment_config.get("record_video", False)
+    video_interval = experiment_config.get("video_interval_updates", 200)
+
     # Initial reset
     obs, _ = vec_env.reset(seed=seed)
 
@@ -430,6 +434,19 @@ def train(
                 if advanced:
                     update_env_curriculum(vec_env, curriculum.current_stage)
                     logger.log("curriculum/stage", curriculum.stage_idx, stats.global_step)
+
+        # Periodic video recording
+        if record_video and stats.update_count % video_interval == 0:
+            from train_eval.video import record_evaluation_videos
+            print(f"\n>>> Recording evaluation videos...")
+            video_dir = run_dir / "videos"
+            record_evaluation_videos(
+                ppo=ppo,
+                config=config,
+                output_dir=video_dir,
+                num_episodes=3,
+                step=stats.global_step,
+            )
 
         # Periodic checkpoint
         if stats.update_count % checkpoint_interval == 0:
