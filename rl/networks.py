@@ -214,7 +214,7 @@ class ActorCritic(nn.Module):
         self,
         obs: torch.Tensor,
         deterministic: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, Optional[torch.Tensor]]:
         """
         Get action from policy.
 
@@ -226,6 +226,7 @@ class ActorCritic(nn.Module):
             action: Action tensor in [-1, 1] (batch_size, action_dim)
             log_prob: Log probability (None if deterministic) (batch_size,)
             value: Value estimate (batch_size,)
+            raw_action: Pre-tanh action (None if deterministic) (batch_size, action_dim)
         """
         mean, log_std, value = self.forward(obs)
         value = value.squeeze(-1)
@@ -233,18 +234,19 @@ class ActorCritic(nn.Module):
         if deterministic:
             # Evaluation: use mean, squashed
             action = torch.tanh(mean)
-            return action, None, value
+            return action, None, value, None
         else:
             # Training: sample from distribution
             dist = TanhGaussianPolicy(mean, log_std)
             action, raw_action = dist.sample()
             log_prob = dist.log_prob(action, raw_action)
-            return action, log_prob, value
+            return action, log_prob, value, raw_action
 
     def evaluate(
         self,
         obs: torch.Tensor,
         actions: torch.Tensor,
+        raw_actions: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Evaluate actions for PPO update.
@@ -252,6 +254,8 @@ class ActorCritic(nn.Module):
         Args:
             obs: Observation tensor (batch_size, obs_dim)
             actions: Action tensor (batch_size, action_dim)
+            raw_actions: Pre-tanh actions for log-prob consistency (batch_size, action_dim)
+                        If provided, uses these directly instead of reconstructing via atanh.
 
         Returns:
             log_prob: Log probability of actions (batch_size,)
@@ -262,7 +266,8 @@ class ActorCritic(nn.Module):
         value = value.squeeze(-1)
 
         dist = TanhGaussianPolicy(mean, log_std)
-        log_prob = dist.log_prob(actions)
+        # Pass raw_actions to avoid atanh reconstruction errors when actions saturate
+        log_prob = dist.log_prob(actions, raw_actions)
         entropy = dist.entropy()
 
         return log_prob, entropy, value

@@ -108,7 +108,7 @@ def evaluate(
 
         while not done:
             # Deterministic action (mean of policy)
-            action, _, _ = ppo.get_action(obs, deterministic=True)
+            action, _, _, _ = ppo.get_action(obs, deterministic=True)
 
             obs, reward, terminated, truncated, info = eval_env.step(action)
             done = terminated or truncated

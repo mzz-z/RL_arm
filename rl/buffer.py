@@ -48,6 +48,7 @@ class RolloutBuffer:
         # Storage arrays (numpy, will convert to torch when needed)
         self.obs = np.zeros((rollout_steps, num_envs, obs_dim), dtype=np.float32)
         self.actions = np.zeros((rollout_steps, num_envs, action_dim), dtype=np.float32)
+        self.raw_actions = np.zeros((rollout_steps, num_envs, action_dim), dtype=np.float32)
         self.log_probs = np.zeros((rollout_steps, num_envs), dtype=np.float32)
         self.rewards = np.zeros((rollout_steps, num_envs), dtype=np.float32)
         self.dones = np.zeros((rollout_steps, num_envs), dtype=np.float32)
@@ -74,6 +75,7 @@ class RolloutBuffer:
         reward: np.ndarray,
         done: np.ndarray,
         value: np.ndarray,
+        raw_action: np.ndarray = None,
     ) -> None:
         """
         Add a transition to the buffer.
@@ -85,6 +87,7 @@ class RolloutBuffer:
             reward: Rewards (num_envs,)
             done: Done flags (num_envs,)
             value: Value estimates (num_envs,)
+            raw_action: Pre-tanh actions for log-prob consistency (num_envs, action_dim)
         """
         if self.step >= self.rollout_steps:
             raise RuntimeError("Buffer is full. Call reset() before adding more.")
@@ -95,6 +98,8 @@ class RolloutBuffer:
         self.rewards[self.step] = reward
         self.dones[self.step] = done
         self.values[self.step] = value
+        if raw_action is not None:
+            self.raw_actions[self.step] = raw_action
 
         self.step += 1
         if self.step == self.rollout_steps:
@@ -164,6 +169,7 @@ class RolloutBuffer:
         # Flatten arrays
         obs_flat = self.obs.reshape(-1, self.obs_dim)
         actions_flat = self.actions.reshape(-1, self.action_dim)
+        raw_actions_flat = self.raw_actions.reshape(-1, self.action_dim)
         log_probs_flat = self.log_probs.reshape(-1)
         advantages_flat = self.advantages.reshape(-1)
         returns_flat = self.returns.reshape(-1)
@@ -187,6 +193,7 @@ class RolloutBuffer:
             yield {
                 "obs": torch.FloatTensor(obs_flat[batch_idx]).to(self.device),
                 "actions": torch.FloatTensor(actions_flat[batch_idx]).to(self.device),
+                "raw_actions": torch.FloatTensor(raw_actions_flat[batch_idx]).to(self.device),
                 "old_log_probs": torch.FloatTensor(log_probs_flat[batch_idx]).to(self.device),
                 "advantages": torch.FloatTensor(advantages_flat[batch_idx]).to(self.device),
                 "returns": torch.FloatTensor(returns_flat[batch_idx]).to(self.device),

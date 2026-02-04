@@ -276,7 +276,7 @@ def record_evaluation_videos(
         video_path = output_dir / f"eval_step{step}_ep{i}"
 
         def policy_fn(obs):
-            action, _, _ = ppo.get_action(obs, deterministic=True)
+            action, _, _, _ = ppo.get_action(obs, deterministic=True)
             return action
 
         result = record_episode(

@@ -96,7 +96,7 @@ class PPO:
         self,
         obs: np.ndarray,
         deterministic: bool = False,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Get action from policy.
 
@@ -108,6 +108,7 @@ class PPO:
             action: Actions (num_envs, action_dim) or (action_dim,)
             log_prob: Log probabilities (num_envs,) or scalar
             value: Value estimates (num_envs,) or scalar
+            raw_action: Pre-tanh actions for log-prob consistency (num_envs, action_dim)
         """
         # Normalize observation if normalizer exists
         if self.obs_normalizer is not None:
@@ -125,7 +126,7 @@ class PPO:
 
         # Get action from policy
         with torch.no_grad():
-            action, log_prob, value = self.policy.act(obs_tensor, deterministic)
+            action, log_prob, value, raw_action = self.policy.act(obs_tensor, deterministic)
 
         # Convert back to numpy
         action = action.cpu().numpy()
@@ -136,13 +137,19 @@ class PPO:
         else:
             log_prob = np.zeros(action.shape[0])
 
+        if raw_action is not None:
+            raw_action = raw_action.cpu().numpy()
+        else:
+            raw_action = np.zeros_like(action)
+
         # Remove batch dimension if single
         if single:
             action = action[0]
             log_prob = log_prob[0]
             value = value[0]
+            raw_action = raw_action[0]
 
-        return action, log_prob, value
+        return action, log_prob, value, raw_action
 
     def get_value(self, obs: np.ndarray) -> np.ndarray:
         """
@@ -198,10 +205,22 @@ class PPO:
         for epoch in range(self.epochs_per_update):
             # Iterate over minibatches
             for batch in self.buffer.get_minibatches(self.minibatch_size, shuffle=True):
+                # CRITICAL FIX: Normalize observations before passing to policy
+                # The buffer stores raw observations, but old_log_probs were computed
+                # with normalized observations during rollout. We must normalize here
+                # to ensure new_log_probs are computed under the same input distribution.
+                obs = batch["obs"]
+                if self.obs_normalizer is not None:
+                    # Normalize on CPU then move to device
+                    obs_np = obs.cpu().numpy()
+                    obs_normalized = self.obs_normalizer.normalize(obs_np)
+                    obs = torch.FloatTensor(obs_normalized).to(self.device)
+
                 # Get current policy outputs
                 new_log_probs, entropy, values = self.policy.evaluate(
-                    batch["obs"],
+                    obs,
                     batch["actions"],
+                    batch["raw_actions"],
                 )
 
                 # Compute policy loss (clipped surrogate)

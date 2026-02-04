@@ -204,8 +204,8 @@ def collect_rollout(
     ppo.buffer.reset()
 
     for step in range(rollout_steps):
-        # Get action from policy
-        action, log_prob, value = ppo.get_action(obs, deterministic=False)
+        # Get action from policy (now also returns raw_action for log-prob consistency)
+        action, log_prob, value, raw_action = ppo.get_action(obs, deterministic=False)
 
         # Update observation normalizer
         if ppo.obs_normalizer is not None:
@@ -215,7 +215,7 @@ def collect_rollout(
         next_obs, rewards, terminateds, truncateds, infos = vec_env.step(action)
         dones = terminateds | truncateds
 
-        # Store transition
+        # Store transition (including raw_action to avoid atanh reconstruction errors)
         ppo.buffer.add(
             obs=obs,
             action=action,
@@ -223,6 +223,7 @@ def collect_rollout(
             reward=rewards,
             done=dones.astype(np.float32),
             value=value,
+            raw_action=raw_action,
         )
 
         # Track completed episodes

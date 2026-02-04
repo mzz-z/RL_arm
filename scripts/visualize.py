@@ -191,7 +191,7 @@ def visualize_trained_policy(
 
     # Define policy function
     def policy_fn(obs):
-        action, _, _ = ppo.get_action(obs, deterministic=True)
+        action, _, _, _ = ppo.get_action(obs, deterministic=True)
         return action
 
     # Run episodes
