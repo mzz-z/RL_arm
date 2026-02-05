@@ -1,6 +1,7 @@
 """Main training script for PPO."""
 
 import os
+import sys
 import random
 import subprocess
 import numpy as np
@@ -220,7 +221,7 @@ def setup_experiment(config_path: str) -> Tuple[dict, Path]:
         pass
 
     # Save environment info
-    env_info = f"Python: {os.sys.version}\n"
+    env_info = f"Python: {sys.version}\n"
     env_info += f"PyTorch: {torch.__version__}\n"
     env_info += f"NumPy: {np.__version__}\n"
     (run_dir / "env_info.txt").write_text(env_info)
@@ -282,43 +283,54 @@ def collect_rollout(
         )
 
         # Track completed episodes
-        # In SyncVectorEnv, when an episode ends, infos["final_info"][i] contains
-        # the final info dict for that env. If env didn't terminate, it's None.
+        # Gymnasium vectorized envs store terminal info in "final_info" list
+        # where final_info[i] is the terminal info dict for env i (None if not done)
         final_infos = infos.get("final_info", [None] * num_envs)
 
         for i, done in enumerate(dones):
-            if done and final_infos[i] is not None:
+            if not done:
+                continue
+
+            # Get info from final_info
+            info = None
+            if final_infos is not None and i < len(final_infos):
                 info = final_infos[i]
 
-                # Extract episode return and length from our env's info
-                # Our env returns episode info in info["episode"] on termination
-                if "episode" in info:
-                    ep_return = float(info["episode"].get("r", 0))
-                    ep_length = int(info["episode"].get("l", 0))
-                    is_success = bool(info["episode"].get("is_success", False))
-                else:
-                    # Fallback
-                    ep_return = float(info.get("episode_return", 0))
-                    ep_length = int(info.get("step_count", 0))
-                    is_success = bool(info.get("is_success", False))
-
-                # Update stats
-                stats.recent_returns.append(ep_return)
-                stats.recent_lengths.append(ep_length)
-                stats.recent_successes.append(float(is_success))
+            if info is None:
+                # No terminal info available - just count the episode
                 stats.episodes_completed += 1
+                continue
 
-                # Phase 2 metrics
-                if "ever_attached" in info:
-                    stats.recent_attach_rate.append(float(info.get("ever_attached", False)))
-                if "lift_success" in info:
-                    stats.recent_lift_success.append(float(info.get("lift_success", False)))
-                if "dropped" in info:
-                    stats.recent_drop_rate.append(float(info.get("dropped", False)))
+            # Extract episode return and length from our env's info
+            # Our env returns episode info in info["episode"] on termination
+            if "episode" in info:
+                ep_data = info["episode"]
+                ep_return = float(ep_data.get("r", 0))
+                ep_length = int(ep_data.get("l", 0))
+                is_success = bool(ep_data.get("is_success", False))
+            else:
+                # Fallback to top-level keys
+                ep_return = float(info.get("episode_return", 0))
+                ep_length = int(info.get("step_count", 0))
+                is_success = bool(info.get("is_success", False))
 
-                # Print episode end
-                if verbose_episodes and logger is not None:
-                    logger.print_episode_end(info, ep_return, ep_length, i)
+            # Update stats
+            stats.recent_returns.append(ep_return)
+            stats.recent_lengths.append(ep_length)
+            stats.recent_successes.append(float(is_success))
+            stats.episodes_completed += 1
+
+            # Phase 2 metrics
+            if "ever_attached" in info:
+                stats.recent_attach_rate.append(float(info.get("ever_attached", False)))
+            if "lift_success" in info:
+                stats.recent_lift_success.append(float(info.get("lift_success", False)))
+            if "dropped" in info:
+                stats.recent_drop_rate.append(float(info.get("dropped", False)))
+
+            # Print episode end
+            if verbose_episodes and logger is not None:
+                logger.print_episode_end(info, ep_return, ep_length, i)
 
         obs = next_obs
 
@@ -335,6 +347,7 @@ def collect_rollout(
 def train(
     config_path: str,
     resume_from: Optional[str] = None,
+    transfer_from: Optional[str] = None,
     verbose_episodes: bool = False,
 ) -> None:
     """
@@ -342,7 +355,8 @@ def train(
 
     Args:
         config_path: Path to configuration file
-        resume_from: Optional checkpoint path to resume from
+        resume_from: Optional checkpoint path to resume training (loads full state)
+        transfer_from: Optional checkpoint path for transfer learning (loads weights only)
         verbose_episodes: Whether to print episode completions
     """
     # Setup experiment
@@ -429,9 +443,16 @@ def train(
     # Resume from checkpoint if specified
     if resume_from is not None:
         print(f"Resuming from: {resume_from}")
-        update_count = ppo.load(resume_from)
+        update_count = ppo.load(resume_from, weights_only=False)
         stats.update_count = update_count
         stats.global_step = update_count * steps_per_update
+
+    # Transfer learning: load weights only, start training fresh
+    if transfer_from is not None:
+        print(f"Transfer learning from: {transfer_from}")
+        ppo.load(transfer_from, weights_only=True)
+        print("  Loaded policy weights and observation normalizer")
+        print("  Fresh optimizer and learning rate schedule")
 
     # Training parameters
     log_interval = experiment_config.get("log_interval_updates", 10)
@@ -549,12 +570,18 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train PPO on arm reach/grasp task")
     parser.add_argument("--config", type=str, required=True, help="Path to config file")
-    parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume from")
+    parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume from (full state)")
+    parser.add_argument("--transfer", type=str, default=None, help="Checkpoint for transfer learning (weights only)")
     parser.add_argument("--verbose", action="store_true", help="Print episode completions")
     args = parser.parse_args()
+
+    if args.resume and args.transfer:
+        print("Error: Cannot specify both --resume and --transfer")
+        sys.exit(1)
 
     train(
         config_path=args.config,
         resume_from=args.resume,
+        transfer_from=args.transfer,
         verbose_episodes=args.verbose,
     )

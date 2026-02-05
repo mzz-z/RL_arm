@@ -467,18 +467,15 @@ class MujocoArmEnv(gym.Env):
         if self.render_mode is None:
             return None
 
-        if self.renderer is None:
-            from mujoco import viewer
-            if self.render_mode == "human":
-                self.viewer = viewer.launch_passive(self.model, self.data)
-            else:
-                self.renderer = mujoco.Renderer(self.model, height=480, width=640)
-
         if self.render_mode == "human":
-            if self.viewer is not None:
-                self.viewer.sync()
+            if self.viewer is None:
+                from mujoco import viewer
+                self.viewer = viewer.launch_passive(self.model, self.data)
+            self.viewer.sync()
             return None
         else:
+            if self.renderer is None:
+                self.renderer = mujoco.Renderer(self.model, height=480, width=640)
             self.renderer.update_scene(self.data)
             return self.renderer.render()
 

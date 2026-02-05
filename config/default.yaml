@@ -52,8 +52,10 @@ env:
     radius_max: 0.40          # Max radial distance (< link1 + link2)
     angle_min: -1.0           # Angular range (radians, 0 = forward)
     angle_max: 1.0
-    y_min: -0.15              # Y-axis variation
-    y_max: 0.15
+    # IMPORTANT: Arm is planar (x-z plane, y=0). Ball must spawn on the plane
+    # for the reach task to be achievable. Keep y_min = y_max = 0.
+    y_min: 0.0
+    y_max: 0.0
 
   # Initial arm state
   init_joints:

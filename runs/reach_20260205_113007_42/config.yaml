@@ -49,8 +49,8 @@ env:
     radius_max: 0.4
     angle_min: -1.0
     angle_max: 1.0
-    y_min: -0.15
-    y_max: 0.15
+    y_min: 0.0
+    y_max: 0.0
   init_joints:
     shoulder_range:
     - -0.3

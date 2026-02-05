@@ -324,20 +324,31 @@ class PPO:
 
         torch.save(state, path)
 
-    def load(self, path: str) -> int:
+    def load(self, path: str, weights_only: bool = False) -> int:
         """
         Load checkpoint.
 
         Args:
             path: Path to checkpoint
+            weights_only: If True, only load policy weights (for transfer learning).
+                          Keeps fresh optimizer, learning rate schedule, and update count.
 
         Returns:
-            Current update count from checkpoint
+            Current update count (0 if weights_only=True)
         """
-        # weights_only=False needed because we save numpy arrays (normalizer state)
+        # weights_only=False for torch.load needed because we save numpy arrays (normalizer state)
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
 
         self.policy.load_state_dict(checkpoint["policy_state_dict"])
+
+        if weights_only:
+            # Transfer learning: only load policy weights, keep fresh optimizer
+            # Optionally load observation normalizer stats (useful for similar tasks)
+            if self.obs_normalizer is not None and "obs_normalizer" in checkpoint:
+                self.obs_normalizer.load_state_dict(checkpoint["obs_normalizer"])
+            return 0
+
+        # Full resume: load optimizer and training state
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         self.current_update = checkpoint["current_update"]
 
