@@ -13,6 +13,10 @@ class RolloutBuffer:
     - Storage of transitions (obs, actions, rewards, etc.)
     - GAE advantage computation with proper terminal handling
     - Minibatch generation for PPO updates
+
+    Performance optimization:
+    - Converts numpy arrays to torch tensors ONCE after GAE computation
+    - Minibatch generation uses tensor indexing (no repeated CPU->GPU transfers)
     """
 
     def __init__(
@@ -58,6 +62,15 @@ class RolloutBuffer:
         self.advantages = np.zeros((rollout_steps, num_envs), dtype=np.float32)
         self.returns = np.zeros((rollout_steps, num_envs), dtype=np.float32)
 
+        # Pre-converted torch tensors (set after compute_gae via prepare_for_update)
+        self._tensors_ready = False
+        self._obs_tensor = None
+        self._actions_tensor = None
+        self._raw_actions_tensor = None
+        self._log_probs_tensor = None
+        self._advantages_tensor = None
+        self._returns_tensor = None
+
         # Track position
         self.step = 0
         self.full = False
@@ -66,6 +79,7 @@ class RolloutBuffer:
         """Reset buffer for new rollout."""
         self.step = 0
         self.full = False
+        self._tensors_ready = False
 
     def add(
         self,
@@ -149,20 +163,16 @@ class RolloutBuffer:
         # Returns = advantages + values
         self.returns = self.advantages + self.values
 
-    def get_minibatches(
-        self,
-        minibatch_size: int,
-        shuffle: bool = True,
-    ) -> Generator[dict, None, None]:
+        # Pre-convert to tensors for efficient minibatch generation
+        self._prepare_tensors()
+
+    def _prepare_tensors(self) -> None:
         """
-        Generate minibatches for PPO update.
+        Convert numpy arrays to torch tensors ONCE after GAE computation.
 
-        Args:
-            minibatch_size: Size of each minibatch
-            shuffle: Whether to shuffle indices
-
-        Yields:
-            Dictionary with batch tensors
+        This is a key performance optimization: instead of creating new tensors
+        for every minibatch (expensive Python overhead + CPU->GPU transfers),
+        we convert once and then use tensor indexing for minibatches.
         """
         total_samples = self.rollout_steps * self.num_envs
 
@@ -171,7 +181,7 @@ class RolloutBuffer:
         actions_flat = self.actions.reshape(-1, self.action_dim)
         raw_actions_flat = self.raw_actions.reshape(-1, self.action_dim)
         log_probs_flat = self.log_probs.reshape(-1)
-        advantages_flat = self.advantages.reshape(-1)
+        advantages_flat = self.advantages.reshape(-1).copy()  # copy for normalization
         returns_flat = self.returns.reshape(-1)
 
         # Normalize advantages (critical for stability)
@@ -179,24 +189,70 @@ class RolloutBuffer:
             advantages_flat.std() + 1e-8
         )
 
-        # Generate indices
-        if shuffle:
-            indices = np.random.permutation(total_samples)
-        else:
-            indices = np.arange(total_samples)
+        # Convert to tensors and move to device ONCE
+        # Using pin_memory for faster CPU->GPU transfer if on CUDA
+        use_pin = self.device != "cpu"
 
-        # Yield minibatches
+        if use_pin:
+            # Create pinned memory tensors for faster transfers
+            self._obs_tensor = torch.from_numpy(obs_flat).pin_memory().to(self.device, non_blocking=True)
+            self._actions_tensor = torch.from_numpy(actions_flat).pin_memory().to(self.device, non_blocking=True)
+            self._raw_actions_tensor = torch.from_numpy(raw_actions_flat).pin_memory().to(self.device, non_blocking=True)
+            self._log_probs_tensor = torch.from_numpy(log_probs_flat).pin_memory().to(self.device, non_blocking=True)
+            self._advantages_tensor = torch.from_numpy(advantages_flat).pin_memory().to(self.device, non_blocking=True)
+            self._returns_tensor = torch.from_numpy(returns_flat).pin_memory().to(self.device, non_blocking=True)
+        else:
+            # CPU path - direct conversion
+            self._obs_tensor = torch.from_numpy(obs_flat).to(self.device)
+            self._actions_tensor = torch.from_numpy(actions_flat).to(self.device)
+            self._raw_actions_tensor = torch.from_numpy(raw_actions_flat).to(self.device)
+            self._log_probs_tensor = torch.from_numpy(log_probs_flat).to(self.device)
+            self._advantages_tensor = torch.from_numpy(advantages_flat).to(self.device)
+            self._returns_tensor = torch.from_numpy(returns_flat).to(self.device)
+
+        self._tensors_ready = True
+
+    def get_minibatches(
+        self,
+        minibatch_size: int,
+        shuffle: bool = True,
+    ) -> Generator[dict, None, None]:
+        """
+        Generate minibatches for PPO update.
+
+        Performance optimization: uses pre-converted tensors and tensor indexing
+        instead of creating new tensors for each minibatch.
+
+        Args:
+            minibatch_size: Size of each minibatch
+            shuffle: Whether to shuffle indices
+
+        Yields:
+            Dictionary with batch tensors
+        """
+        if not self._tensors_ready:
+            raise RuntimeError("Tensors not ready. Call compute_gae() first.")
+
+        total_samples = self.rollout_steps * self.num_envs
+
+        # Generate indices (on CPU, will be used for tensor indexing)
+        if shuffle:
+            indices = torch.randperm(total_samples, device=self.device)
+        else:
+            indices = torch.arange(total_samples, device=self.device)
+
+        # Yield minibatches using tensor indexing (no new allocations)
         for start in range(0, total_samples, minibatch_size):
             end = min(start + minibatch_size, total_samples)
             batch_idx = indices[start:end]
 
             yield {
-                "obs": torch.FloatTensor(obs_flat[batch_idx]).to(self.device),
-                "actions": torch.FloatTensor(actions_flat[batch_idx]).to(self.device),
-                "raw_actions": torch.FloatTensor(raw_actions_flat[batch_idx]).to(self.device),
-                "old_log_probs": torch.FloatTensor(log_probs_flat[batch_idx]).to(self.device),
-                "advantages": torch.FloatTensor(advantages_flat[batch_idx]).to(self.device),
-                "returns": torch.FloatTensor(returns_flat[batch_idx]).to(self.device),
+                "obs": self._obs_tensor[batch_idx],
+                "actions": self._actions_tensor[batch_idx],
+                "raw_actions": self._raw_actions_tensor[batch_idx],
+                "old_log_probs": self._log_probs_tensor[batch_idx],
+                "advantages": self._advantages_tensor[batch_idx],
+                "returns": self._returns_tensor[batch_idx],
             }
 
     def get_all_data(self) -> dict:

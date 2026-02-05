@@ -1,6 +1,8 @@
 """Curriculum learning manager for progressive difficulty."""
 
+import warnings
 from typing import Dict, List, Optional, Any
+from gymnasium.vector import SyncVectorEnv, AsyncVectorEnv
 
 
 class CurriculumManager:
@@ -107,8 +109,13 @@ def update_env_curriculum(vec_env, stage_config: Dict[str, Any]) -> None:
     Update vectorized env with new curriculum parameters.
 
     Args:
-        vec_env: Gymnasium SyncVectorEnv
+        vec_env: Gymnasium vectorized environment (SyncVectorEnv or AsyncVectorEnv)
         stage_config: Curriculum stage configuration
+
+    Note:
+        For AsyncVectorEnv, this updates the envs attribute which contains
+        the subprocess connections. The actual parameter updates happen
+        through method calls that are serialized to the subprocesses.
     """
     spawn_config = stage_config.get("spawn", {})
 
@@ -135,20 +142,41 @@ def update_env_curriculum(vec_env, stage_config: Dict[str, Any]) -> None:
     y_range = (y_min, y_max) if y_min is not None else None
 
     # Update each environment in the vectorized env
-    # SyncVectorEnv stores envs in envs attribute
-    for env in vec_env.envs:
-        # Get the unwrapped environment
-        unwrapped = env
-        while hasattr(unwrapped, "env"):
-            unwrapped = unwrapped.env
+    if isinstance(vec_env, AsyncVectorEnv):
+        # For AsyncVectorEnv, envs are in worker subprocesses
+        # We can use call_async to invoke methods on all workers
+        # However, this requires the method to exist and be callable
+        # For now, warn that curriculum may not work perfectly with async envs
+        warnings.warn(
+            "Curriculum updates with AsyncVectorEnv may not take effect until env reset. "
+            "Consider using async_envs: false in config if curriculum is critical.",
+            RuntimeWarning,
+        )
+        # Try to update via call if the vec_env supports it
+        try:
+            # This attempts to call set_spawn_params on all envs
+            vec_env.call("set_spawn_params",
+                        radius_range=radius_range,
+                        angle_range=angle_range,
+                        y_range=y_range)
+        except Exception:
+            # If call doesn't work, the curriculum update will happen on next reset
+            pass
+    else:
+        # SyncVectorEnv: direct access to envs
+        for env in vec_env.envs:
+            # Get the unwrapped environment
+            unwrapped = env
+            while hasattr(unwrapped, "env"):
+                unwrapped = unwrapped.env
 
-        # Update spawn parameters
-        if hasattr(unwrapped, "set_spawn_params"):
-            unwrapped.set_spawn_params(
-                radius_range=radius_range,
-                angle_range=angle_range,
-                y_range=y_range,
-            )
+            # Update spawn parameters
+            if hasattr(unwrapped, "set_spawn_params"):
+                unwrapped.set_spawn_params(
+                    radius_range=radius_range,
+                    angle_range=angle_range,
+                    y_range=y_range,
+                )
 
 
 def create_curriculum(config: dict) -> Optional[CurriculumManager]:

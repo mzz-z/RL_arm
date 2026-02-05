@@ -6,9 +6,10 @@ import subprocess
 import numpy as np
 import torch
 from datetime import datetime
+from functools import partial
 from pathlib import Path
-from typing import Optional, Tuple
-from gymnasium.vector import SyncVectorEnv
+from typing import Optional, Tuple, Union
+from gymnasium.vector import SyncVectorEnv, AsyncVectorEnv
 
 from env.mujoco_env import MujocoArmEnv
 from env.observations import ObservationBuilder
@@ -21,12 +22,14 @@ from train_eval.curriculum import CurriculumManager, create_curriculum, update_e
 from train_eval.eval import evaluate
 
 
-def set_all_seeds(seed: int) -> None:
+def set_all_seeds(seed: int, fast_mode: bool = True) -> None:
     """
     Set seeds for all random number generators.
 
     Args:
         seed: Random seed
+        fast_mode: If True, use fast non-deterministic settings for better performance.
+                   If False, use deterministic settings for reproducibility.
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -34,14 +37,87 @@ def set_all_seeds(seed: int) -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-    # For reproducibility (may slow down training slightly)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    if fast_mode:
+        # Fast mode: allow non-deterministic operations for speed
+        torch.backends.cudnn.deterministic = False
+        torch.backends.cudnn.benchmark = True
+        # Enable TF32 for faster matmuls on Ampere+ GPUs (minor precision loss, big speedup)
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        # Set matmul precision for PyTorch 2.x (high = TF32 on supported hardware)
+        if hasattr(torch, 'set_float32_matmul_precision'):
+            torch.set_float32_matmul_precision('high')
+    else:
+        # Deterministic mode: slower but reproducible
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+
+
+def _create_single_env(
+    env_config: dict,
+    control_config: dict,
+    reward_config: dict,
+    seed: int,
+    rank: int,
+) -> MujocoArmEnv:
+    """
+    Top-level function to create a single environment instance.
+    This is a standalone function (not a closure) so it can be pickled for AsyncVectorEnv.
+
+    Args:
+        env_config: Environment configuration dict
+        control_config: Controller configuration dict
+        reward_config: Reward configuration dict
+        seed: Base seed
+        rank: Environment index (for seed offset)
+
+    Returns:
+        MujocoArmEnv instance
+    """
+    env = MujocoArmEnv(
+        task_mode=env_config.get("task_mode", "reach"),
+        max_episode_steps=env_config.get("max_episode_steps", 200),
+        frame_skip=env_config.get("frame_skip", 4),
+        # Spawn parameters
+        spawn_radius_min=env_config.get("spawn", {}).get("radius_min", 0.15),
+        spawn_radius_max=env_config.get("spawn", {}).get("radius_max", 0.40),
+        spawn_angle_min=env_config.get("spawn", {}).get("angle_min", -1.0),
+        spawn_angle_max=env_config.get("spawn", {}).get("angle_max", 1.0),
+        spawn_y_min=env_config.get("spawn", {}).get("y_min", -0.15),
+        spawn_y_max=env_config.get("spawn", {}).get("y_max", 0.15),
+        # Initial joint state
+        init_shoulder_range=tuple(env_config.get("init_joints", {}).get("shoulder_range", [-0.3, 0.3])),
+        init_elbow_range=tuple(env_config.get("init_joints", {}).get("elbow_range", [-0.3, 0.3])),
+        init_vel_noise_std=env_config.get("init_joints", {}).get("vel_noise_std", 0.01),
+        # Task parameters
+        reach_radius=env_config.get("reach", {}).get("reach_radius", 0.05),
+        dwell_steps=env_config.get("reach", {}).get("dwell_steps", 5),
+        ee_vel_threshold=env_config.get("reach", {}).get("ee_vel_threshold", 0.1),
+        attach_radius=env_config.get("magnet", {}).get("attach_radius", 0.04),
+        attach_vel_threshold=env_config.get("magnet", {}).get("attach_vel_threshold", 0.15),
+        lift_height=env_config.get("lift", {}).get("lift_height", 0.1),
+        hold_steps=env_config.get("lift", {}).get("hold_steps", 10),
+        # Reward config
+        reward_config=reward_config,
+        # Termination
+        ball_fell_threshold=env_config.get("termination", {}).get("ball_fell_threshold", -0.05),
+        unreachable_margin=env_config.get("termination", {}).get("unreachable_margin", 0.1),
+    )
+
+    # Create and set controller
+    env.create_controller_from_config(control_config)
+
+    # Seed with rank offset for diversity
+    env.reset(seed=seed + rank)
+
+    return env
 
 
 def make_env(config: dict, seed: int, rank: int):
     """
-    Factory function for creating a single env instance.
+    Factory function for creating a single env instance (for SyncVectorEnv).
 
     Args:
         config: Full configuration dict
@@ -51,62 +127,35 @@ def make_env(config: dict, seed: int, rank: int):
     Returns:
         Callable that creates the environment
     """
-    def _init():
-        env_config = config.get("env", {})
-        control_config = config.get("control", {})
-        reward_config = config.get("reward", {})
+    env_config = config.get("env", {})
+    control_config = config.get("control", {})
+    reward_config = config.get("reward", {})
 
-        # Create environment
-        env = MujocoArmEnv(
-            task_mode=env_config.get("task_mode", "reach"),
-            max_episode_steps=env_config.get("max_episode_steps", 200),
-            frame_skip=env_config.get("frame_skip", 4),
-            # Spawn parameters
-            spawn_radius_min=env_config.get("spawn", {}).get("radius_min", 0.15),
-            spawn_radius_max=env_config.get("spawn", {}).get("radius_max", 0.40),
-            spawn_angle_min=env_config.get("spawn", {}).get("angle_min", -1.0),
-            spawn_angle_max=env_config.get("spawn", {}).get("angle_max", 1.0),
-            spawn_y_min=env_config.get("spawn", {}).get("y_min", -0.15),
-            spawn_y_max=env_config.get("spawn", {}).get("y_max", 0.15),
-            # Initial joint state
-            init_shoulder_range=tuple(env_config.get("init_joints", {}).get("shoulder_range", [-0.3, 0.3])),
-            init_elbow_range=tuple(env_config.get("init_joints", {}).get("elbow_range", [-0.3, 0.3])),
-            init_vel_noise_std=env_config.get("init_joints", {}).get("vel_noise_std", 0.01),
-            # Task parameters
-            reach_radius=env_config.get("reach", {}).get("reach_radius", 0.05),
-            dwell_steps=env_config.get("reach", {}).get("dwell_steps", 5),
-            ee_vel_threshold=env_config.get("reach", {}).get("ee_vel_threshold", 0.1),
-            attach_radius=env_config.get("magnet", {}).get("attach_radius", 0.04),
-            attach_vel_threshold=env_config.get("magnet", {}).get("attach_vel_threshold", 0.15),
-            lift_height=env_config.get("lift", {}).get("lift_height", 0.1),
-            hold_steps=env_config.get("lift", {}).get("hold_steps", 10),
-            # Reward config
-            reward_config=reward_config,
-            # Termination
-            ball_fell_threshold=env_config.get("termination", {}).get("ball_fell_threshold", -0.05),
-            unreachable_margin=env_config.get("termination", {}).get("unreachable_margin", 0.1),
-        )
-
-        # Create and set controller
-        env.create_controller_from_config(control_config)
-
-        # Seed with rank offset for diversity
-        env.reset(seed=seed + rank)
-
-        return env
-
-    return _init
+    # Return a partial application of the top-level function (picklable)
+    return partial(
+        _create_single_env,
+        env_config=env_config,
+        control_config=control_config,
+        reward_config=reward_config,
+        seed=seed,
+        rank=rank,
+    )
 
 
-def build_vectorized_env(config: dict) -> SyncVectorEnv:
+def build_vectorized_env(
+    config: dict,
+    use_async: bool = True,
+) -> Union[SyncVectorEnv, AsyncVectorEnv]:
     """
     Build vectorized environment with N parallel workers.
 
     Args:
         config: Configuration dictionary
+        use_async: If True, use AsyncVectorEnv for parallel stepping (faster).
+                   If False, use SyncVectorEnv (sequential, for debugging).
 
     Returns:
-        SyncVectorEnv instance
+        Vectorized environment instance
     """
     ppo_config = config.get("ppo", {})
     experiment_config = config.get("experiment", {})
@@ -119,7 +168,13 @@ def build_vectorized_env(config: dict) -> SyncVectorEnv:
         for i in range(num_envs)
     ]
 
-    vec_env = SyncVectorEnv(env_fns)
+    if use_async:
+        # AsyncVectorEnv: each env runs in its own subprocess
+        # This enables true parallelism for MuJoCo stepping
+        vec_env = AsyncVectorEnv(env_fns, shared_memory=False)
+    else:
+        # SyncVectorEnv: sequential stepping (useful for debugging)
+        vec_env = SyncVectorEnv(env_fns)
 
     return vec_env
 
@@ -174,7 +229,7 @@ def setup_experiment(config_path: str) -> Tuple[dict, Path]:
 
 
 def collect_rollout(
-    vec_env: SyncVectorEnv,
+    vec_env: Union[SyncVectorEnv, AsyncVectorEnv],
     ppo: PPO,
     rollout_steps: int,
     initial_obs: np.ndarray,
@@ -296,9 +351,10 @@ def train(
     ppo_config = config.get("ppo", {})
     model_config = config.get("model", {})
 
-    # Set seeds
+    # Set seeds (fast_mode enables non-deterministic but faster operations)
     seed = experiment_config.get("seed", 42)
-    set_all_seeds(seed)
+    fast_mode = experiment_config.get("fast_mode", True)
+    set_all_seeds(seed, fast_mode=fast_mode)
 
     # Get device
     device = experiment_config.get("device", "cuda")
@@ -306,16 +362,29 @@ def train(
         print("Warning: CUDA not available, falling back to CPU")
         device = "cpu"
 
+    # Check if async envs are enabled (default True for performance)
+    use_async_envs = experiment_config.get("async_envs", True)
+
+    # Check if curriculum is enabled - if so, prefer sync envs for reliable updates
+    curriculum_config = config.get("curriculum", {})
+    curriculum_enabled = curriculum_config.get("enabled", False)
+    if curriculum_enabled and use_async_envs:
+        print("Note: Curriculum enabled - using sync envs for reliable curriculum updates")
+        use_async_envs = False
+
     print(f"\n{'='*60}")
     print(f"Training: {config.get('env', {}).get('task_mode', 'reach')}")
     print(f"Device: {device}")
+    print(f"Fast mode: {fast_mode}")
+    print(f"Async envs: {use_async_envs}")
     print(f"Run directory: {run_dir}")
     print(f"{'='*60}\n")
 
     # Build vectorized environment
-    vec_env = build_vectorized_env(config)
+    vec_env = build_vectorized_env(config, use_async=use_async_envs)
     num_envs = ppo_config.get("num_envs", 8)
-    print(f"Created {num_envs} parallel environments")
+    env_type = "async" if use_async_envs else "sync"
+    print(f"Created {num_envs} parallel environments ({env_type})")
 
     # Get dimensions
     obs_dim = ObservationBuilder.OBS_DIM  # 14
