@@ -136,10 +136,10 @@ def update_env_curriculum(vec_env, stage_config: Dict[str, Any]) -> None:
     angle_max = spawn_config.get("angle_max")
     angle_range = (angle_min, angle_max) if angle_min is not None else None
 
-    # Get y range (optional)
-    y_min = spawn_config.get("y_min")
-    y_max = spawn_config.get("y_max")
-    y_range = (y_min, y_max) if y_min is not None else None
+    # Get azimuth range (optional)
+    azimuth_min = spawn_config.get("azimuth_min")
+    azimuth_max = spawn_config.get("azimuth_max")
+    azimuth_range = (azimuth_min, azimuth_max) if azimuth_min is not None else None
 
     # Update each environment in the vectorized env
     if isinstance(vec_env, AsyncVectorEnv):
@@ -158,7 +158,7 @@ def update_env_curriculum(vec_env, stage_config: Dict[str, Any]) -> None:
             vec_env.call("set_spawn_params",
                         radius_range=radius_range,
                         angle_range=angle_range,
-                        y_range=y_range)
+                        azimuth_range=azimuth_range)
         except Exception:
             # If call doesn't work, the curriculum update will happen on next reset
             pass
@@ -175,7 +175,7 @@ def update_env_curriculum(vec_env, stage_config: Dict[str, Any]) -> None:
                 unwrapped.set_spawn_params(
                     radius_range=radius_range,
                     angle_range=angle_range,
-                    y_range=y_range,
+                    azimuth_range=azimuth_range,
                 )
 
 

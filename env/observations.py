@@ -1,4 +1,4 @@
-"""Observation builder for the 2-DOF arm environment."""
+"""Observation builder for the 3-DOF arm environment."""
 
 import numpy as np
 import mujoco
@@ -12,16 +12,16 @@ class ObservationBuilder:
     """
     Builds the observation vector from MuJoCo state.
 
-    Observation vector (14 dimensions):
-        - joint angles (2): shoulder, elbow (normalized by joint limits)
-        - joint velocities (2): shoulder_vel, elbow_vel (scaled)
+    Observation vector (16 dimensions):
+        - joint angles (3): base, shoulder, elbow (normalized by joint limits)
+        - joint velocities (3): base_vel, shoulder_vel, elbow_vel (scaled)
         - end-effector position (3): x, y, z (world frame)
         - end-effector velocity (3): vx, vy, vz
         - ball position (3): x, y, z (world frame)
         - grasp flag (1): 0 or 1
     """
 
-    OBS_DIM = 14
+    OBS_DIM = 16
 
     def __init__(
         self,
@@ -36,7 +36,7 @@ class ObservationBuilder:
         Args:
             model: MuJoCo model
             ids: Dictionary of model element IDs from validation
-            joint_limits: Dict with shoulder/elbow limit tuples
+            joint_limits: Dict with base/shoulder/elbow limit tuples
             vel_scale: Scale factor for joint velocities
         """
         self.model = model
@@ -44,10 +44,12 @@ class ObservationBuilder:
         self.vel_scale = vel_scale
 
         # Joint limit normalization
+        self.base_min, self.base_max = joint_limits["base"]
         self.shoulder_min, self.shoulder_max = joint_limits["shoulder"]
         self.elbow_min, self.elbow_max = joint_limits["elbow"]
 
         # Precompute normalization factors
+        self.base_range = self.base_max - self.base_min
         self.shoulder_range = self.shoulder_max - self.shoulder_min
         self.elbow_range = self.elbow_max - self.elbow_min
 
@@ -64,38 +66,42 @@ class ObservationBuilder:
             attached: Whether ball is attached (grasp flag)
 
         Returns:
-            14-dim observation vector
+            16-dim observation vector
         """
         obs = np.zeros(self.OBS_DIM, dtype=np.float32)
 
         # Joint angles (normalized to roughly [-1, 1])
+        base_pos = data.qpos[self.ids["base_qpos_addr"]]
         shoulder_pos = data.qpos[self.ids["shoulder_qpos_addr"]]
         elbow_pos = data.qpos[self.ids["elbow_qpos_addr"]]
 
-        obs[0] = 2.0 * (shoulder_pos - self.shoulder_min) / self.shoulder_range - 1.0
-        obs[1] = 2.0 * (elbow_pos - self.elbow_min) / self.elbow_range - 1.0
+        obs[0] = 2.0 * (base_pos - self.base_min) / self.base_range - 1.0
+        obs[1] = 2.0 * (shoulder_pos - self.shoulder_min) / self.shoulder_range - 1.0
+        obs[2] = 2.0 * (elbow_pos - self.elbow_min) / self.elbow_range - 1.0
 
         # Joint velocities (scaled)
+        base_vel = data.qvel[self.ids["base_qvel_addr"]]
         shoulder_vel = data.qvel[self.ids["shoulder_qvel_addr"]]
         elbow_vel = data.qvel[self.ids["elbow_qvel_addr"]]
 
-        obs[2] = shoulder_vel / self.vel_scale
-        obs[3] = elbow_vel / self.vel_scale
+        obs[3] = base_vel / self.vel_scale
+        obs[4] = shoulder_vel / self.vel_scale
+        obs[5] = elbow_vel / self.vel_scale
 
         # End-effector position (world frame)
         ee_pos = data.site_xpos[self.ids["ee_site"]]
-        obs[4:7] = ee_pos
+        obs[6:9] = ee_pos
 
         # End-effector velocity
         ee_vel = self._compute_ee_velocity(data)
-        obs[7:10] = ee_vel
+        obs[9:12] = ee_vel
 
         # Ball position (world frame)
         ball_pos = data.xpos[self.ids["ball_body"]]
-        obs[10:13] = ball_pos
+        obs[12:15] = ball_pos
 
         # Grasp flag
-        obs[13] = float(attached)
+        obs[15] = float(attached)
 
         return obs
 
@@ -159,8 +165,10 @@ class ObservationBuilder:
             "ball_z": ball_pos[2],
             "attached": attached,
             # Joint state
+            "base_pos": data.qpos[self.ids["base_qpos_addr"]],
             "shoulder_pos": data.qpos[self.ids["shoulder_qpos_addr"]],
             "elbow_pos": data.qpos[self.ids["elbow_qpos_addr"]],
+            "base_vel": data.qvel[self.ids["base_qvel_addr"]],
             "shoulder_vel": data.qvel[self.ids["shoulder_qvel_addr"]],
             "elbow_vel": data.qvel[self.ids["elbow_qvel_addr"]],
             # Progress counters

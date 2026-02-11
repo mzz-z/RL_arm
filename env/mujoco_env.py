@@ -1,4 +1,4 @@
-"""Main MuJoCo environment for the 2-DOF arm RL task."""
+"""Main MuJoCo environment for the 3-DOF arm RL task."""
 
 import numpy as np
 import mujoco
@@ -16,9 +16,10 @@ from env.task_grasp import GraspTask, create_grasp_task
 
 class MujocoArmEnv(gym.Env):
     """
-    Gymnasium environment for 2-DOF arm reach/grasp task.
+    Gymnasium environment for 3-DOF arm reach/grasp task.
 
-    The arm operates in the vertical x-z plane with:
+    The arm has:
+    - Base joint: rotates around z-axis (turret)
     - Shoulder joint: rotates around y-axis
     - Elbow joint: rotates around y-axis
 
@@ -41,9 +42,11 @@ class MujocoArmEnv(gym.Env):
         spawn_radius_max: float = 0.40,
         spawn_angle_min: float = -1.0,
         spawn_angle_max: float = 1.0,
-        spawn_y_min: float = -0.15,
-        spawn_y_max: float = 0.15,
+        # Azimuth angle for 3D ball spawning (around z-axis)
+        spawn_azimuth_min: float = 0.0,
+        spawn_azimuth_max: float = 0.0,
         # Initial joint state
+        init_base_range: tuple = (-0.1, 0.1),
         init_shoulder_range: tuple = (-0.3, 0.3),
         init_elbow_range: tuple = (-0.3, 0.3),
         init_vel_noise_std: float = 0.01,
@@ -51,6 +54,7 @@ class MujocoArmEnv(gym.Env):
         reach_radius: float = 0.05,
         dwell_steps: int = 5,
         ee_vel_threshold: float = 0.1,
+        w_delta_dist: float = 5.0,  # Delta distance reward weight
         attach_radius: float = 0.04,
         attach_vel_threshold: float = 0.15,
         lift_height: float = 0.1,
@@ -71,8 +75,9 @@ class MujocoArmEnv(gym.Env):
             frame_skip: Number of sim steps per env step
             render_mode: "human" or "rgb_array" or None
             spawn_radius_min/max: Ball spawn distance from base
-            spawn_angle_min/max: Ball spawn angle (radians)
-            spawn_y_min/max: Ball y-coordinate range
+            spawn_angle_min/max: Ball spawn elevation angle (radians)
+            spawn_azimuth_min/max: Ball spawn azimuth angle around z-axis (radians)
+            init_base_range: Initial base angle range
             init_shoulder_range: Initial shoulder angle range
             init_elbow_range: Initial elbow angle range
             init_vel_noise_std: Initial velocity noise
@@ -100,10 +105,11 @@ class MujocoArmEnv(gym.Env):
         self.spawn_radius_max = spawn_radius_max
         self.spawn_angle_min = spawn_angle_min
         self.spawn_angle_max = spawn_angle_max
-        self.spawn_y_min = spawn_y_min
-        self.spawn_y_max = spawn_y_max
+        self.spawn_azimuth_min = spawn_azimuth_min
+        self.spawn_azimuth_max = spawn_azimuth_max
 
         # Initial state parameters
+        self.init_base_range = init_base_range
         self.init_shoulder_range = init_shoulder_range
         self.init_elbow_range = init_elbow_range
         self.init_vel_noise_std = init_vel_noise_std
@@ -146,6 +152,7 @@ class MujocoArmEnv(gym.Env):
                 "reach_radius": reach_radius,
                 "dwell_steps": dwell_steps,
                 "ee_vel_threshold": ee_vel_threshold,
+                "w_delta_dist": w_delta_dist,
             }
             self.task = create_reach_task(task_config, self.reward_computer)
         elif task_mode == "grasp":
@@ -168,7 +175,7 @@ class MujocoArmEnv(gym.Env):
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(2,),
+            shape=(3,),
             dtype=np.float32,
         )
 
@@ -244,13 +251,18 @@ class MujocoArmEnv(gym.Env):
         mujoco.mj_resetData(self.model, self.data)
 
         # Initialize arm joints
+        base_init = self.np_random.uniform(*self.init_base_range)
         shoulder_init = self.np_random.uniform(*self.init_shoulder_range)
         elbow_init = self.np_random.uniform(*self.init_elbow_range)
 
+        self.data.qpos[self.ids["base_qpos_addr"]] = base_init
         self.data.qpos[self.ids["shoulder_qpos_addr"]] = shoulder_init
         self.data.qpos[self.ids["elbow_qpos_addr"]] = elbow_init
 
         # Add small velocity noise
+        self.data.qvel[self.ids["base_qvel_addr"]] = self.np_random.normal(
+            0, self.init_vel_noise_std
+        )
         self.data.qvel[self.ids["shoulder_qvel_addr"]] = self.np_random.normal(
             0, self.init_vel_noise_std
         )
@@ -275,7 +287,7 @@ class MujocoArmEnv(gym.Env):
 
         # Reset controller if available
         if self.controller is not None:
-            self.controller.reset(np.array([shoulder_init, elbow_init]))
+            self.controller.reset(np.array([base_init, shoulder_init, elbow_init]))
 
         # Forward to update state
         mujoco.mj_forward(self.model, self.data)
@@ -295,7 +307,7 @@ class MujocoArmEnv(gym.Env):
         Take one step in the environment.
 
         Args:
-            action: Action array (2,) in [-1, 1]
+            action: Action array (3,) in [-1, 1]
 
         Returns:
             (observation, reward, terminated, truncated, info)
@@ -307,7 +319,7 @@ class MujocoArmEnv(gym.Env):
             self.controller.apply_action(action, self.data)
         else:
             # Fallback: direct control (not recommended)
-            self.data.ctrl[:2] = action * 2.0  # Scale to approximate joint range
+            self.data.ctrl[:3] = action * 2.0  # Scale to approximate joint range
 
         # Step simulation
         for _ in range(self.frame_skip):
@@ -325,6 +337,7 @@ class MujocoArmEnv(gym.Env):
         ball_z = ball_pos[2]
 
         joint_vel = np.array([
+            self.data.qvel[self.ids["base_qvel_addr"]],
             self.data.qvel[self.ids["shoulder_qvel_addr"]],
             self.data.qvel[self.ids["elbow_qvel_addr"]],
         ])
@@ -397,23 +410,27 @@ class MujocoArmEnv(gym.Env):
 
     def _sample_ball_position(self) -> np.ndarray:
         """
-        Sample ball position in reachable region.
+        Sample ball position in reachable region using spherical coordinates.
+
+        Uses azimuth angle for 3D spawning around the base.
 
         Returns:
             3D position (x, y, z)
         """
-        # Sample radial distance in x-z plane
+        # Sample radial distance
         r = self.np_random.uniform(self.spawn_radius_min, self.spawn_radius_max)
 
-        # Sample angle (0 = forward along x-axis)
-        theta = self.np_random.uniform(self.spawn_angle_min, self.spawn_angle_max)
+        # Sample elevation angle (0 = forward along horizontal, positive = upward)
+        elevation = self.np_random.uniform(self.spawn_angle_min, self.spawn_angle_max)
 
-        # Convert to Cartesian (arm moves in x-z plane)
-        x = r * np.cos(theta)
-        z = self.table_height + self.ball_radius + r * np.sin(theta)
+        # Sample azimuth angle (around z-axis)
+        azimuth = self.np_random.uniform(self.spawn_azimuth_min, self.spawn_azimuth_max)
 
-        # Sample y position (perpendicular to arm plane)
-        y = self.np_random.uniform(self.spawn_y_min, self.spawn_y_max)
+        # Convert to Cartesian
+        horiz_dist = r * np.cos(elevation)
+        x = horiz_dist * np.cos(azimuth)
+        y = horiz_dist * np.sin(azimuth)
+        z = self.table_height + self.ball_radius + r * np.sin(elevation)
 
         # Ensure ball is above table
         z = max(z, self.table_height + self.ball_radius)
@@ -492,19 +509,19 @@ class MujocoArmEnv(gym.Env):
         self,
         radius_range: Optional[tuple] = None,
         angle_range: Optional[tuple] = None,
-        y_range: Optional[tuple] = None,
+        azimuth_range: Optional[tuple] = None,
     ):
         """
         Update spawn parameters (for curriculum learning).
 
         Args:
             radius_range: (min, max) spawn radius
-            angle_range: (min, max) spawn angle
-            y_range: (min, max) y position
+            angle_range: (min, max) spawn elevation angle
+            azimuth_range: (min, max) azimuth angle around z-axis
         """
         if radius_range is not None:
             self.spawn_radius_min, self.spawn_radius_max = radius_range
         if angle_range is not None:
             self.spawn_angle_min, self.spawn_angle_max = angle_range
-        if y_range is not None:
-            self.spawn_y_min, self.spawn_y_max = y_range
+        if azimuth_range is not None:
+            self.spawn_azimuth_min, self.spawn_azimuth_max = azimuth_range

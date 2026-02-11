@@ -1,10 +1,14 @@
-<mujoco model="2dof_arm">
+<mujoco model="3dof_arm">
   <!--
-    2-DOF planar arm operating in vertical x-z plane.
-    - Shoulder and elbow rotate around y-axis
-    - Arm can reach and lift in x-z plane
+    3-DOF arm with base rotation.
+    - Base rotates around z-axis (turret)
+    - Shoulder and elbow rotate around y-axis (vertical plane)
+    - Arm can reach in any direction around the base
     - Ball has freejoint for physics-based movement
     - Weld constraint for grasp attachment
+    - Gripper visualization at end-effector
+
+    JOINT LIMITS: Carefully tuned to prevent arm going under table (z=0.42)
   -->
 
   <compiler angle="radian" coordinate="local"/>
@@ -16,16 +20,22 @@
   <default>
     <joint armature="0.01" damping="0.5" limited="true"/>
     <geom contype="1" conaffinity="1" friction="0.5 0.1 0.1"/>
-    <position kp="50" ctrlrange="-2.5 2.5"/>
+    <position kp="40" ctrlrange="-2.5 2.5"/>
   </default>
 
   <asset>
     <texture name="grid" type="2d" builtin="checker" width="512" height="512"
-             rgb1="0.2 0.2 0.2" rgb2="0.3 0.3 0.3"/>
+             rgb1="0.15 0.15 0.15" rgb2="0.25 0.25 0.25"/>
     <material name="grid_mat" texture="grid" texrepeat="5 5" reflectance="0.1"/>
-    <material name="arm_mat" rgba="0.3 0.5 0.7 1"/>
-    <material name="table_mat" rgba="0.5 0.4 0.3 1"/>
-    <material name="ball_mat" rgba="1 0.2 0.2 1"/>
+
+    <!-- Robot materials -->
+    <material name="metal_dark" rgba="0.2 0.22 0.25 1" specular="0.8" shininess="0.9"/>
+    <material name="metal_blue" rgba="0.15 0.35 0.55 1" specular="0.6" shininess="0.7"/>
+    <material name="metal_light" rgba="0.6 0.65 0.7 1" specular="0.9" shininess="0.95"/>
+    <material name="joint_orange" rgba="0.9 0.45 0.1 1" specular="0.5" shininess="0.6"/>
+    <material name="gripper_mat" rgba="0.3 0.3 0.35 1" specular="0.7" shininess="0.8"/>
+    <material name="table_mat" rgba="0.45 0.35 0.25 1"/>
+    <material name="ball_mat" rgba="0.95 0.2 0.15 1" specular="0.4" shininess="0.5"/>
   </asset>
 
   <worldbody>
@@ -36,34 +46,84 @@
     <body name="table" pos="0.3 0 0.4">
       <geom name="table_top" type="box" size="0.4 0.4 0.02" material="table_mat"
             conaffinity="1" contype="1" mass="10"/>
+      <!-- Table legs -->
+      <geom name="leg1" type="cylinder" pos="-0.35 -0.35 -0.2" size="0.025 0.18" material="metal_dark" contype="0" conaffinity="0"/>
+      <geom name="leg2" type="cylinder" pos="0.35 -0.35 -0.2" size="0.025 0.18" material="metal_dark" contype="0" conaffinity="0"/>
+      <geom name="leg3" type="cylinder" pos="-0.35 0.35 -0.2" size="0.025 0.18" material="metal_dark" contype="0" conaffinity="0"/>
+      <geom name="leg4" type="cylinder" pos="0.35 0.35 -0.2" size="0.025 0.18" material="metal_dark" contype="0" conaffinity="0"/>
     </body>
 
     <!-- Arm base (fixed to world at table height) -->
     <body name="arm_base" pos="0 0 0.42">
-      <geom name="base_geom" type="cylinder" size="0.03 0.02" rgba="0.2 0.2 0.2 1" mass="1"/>
+      <!-- Base mounting plate (fixed, doesn't rotate) -->
+      <geom name="base_plate" type="cylinder" size="0.06 0.015" pos="0 0 -0.015" material="metal_dark" mass="0.5" contype="0" conaffinity="0"/>
 
-      <!-- Link 1 (upper arm) -->
-      <body name="link1" pos="0 0 0">
-        <!-- Shoulder joint: rotates in x-z plane around y-axis -->
-        <joint name="shoulder" type="hinge" axis="0 1 0" range="-2.0 2.0"
+      <!-- Turret body (rotates around z-axis) -->
+      <body name="arm_turret" pos="0 0 0">
+        <joint name="base" type="hinge" axis="0 0 1" range="-3.14159 3.14159"
                damping="0.5" armature="0.02"/>
 
-        <!-- Link 1 geometry - extends in +x direction when angle=0 -->
-        <geom name="link1_geom" type="capsule" fromto="0 0 0 0.25 0 0" size="0.02"
-              material="arm_mat" mass="0.5"/>
+        <!-- Base column (rotates with turret) -->
+        <geom name="base_column" type="cylinder" size="0.04 0.03" material="metal_dark" mass="0.5" contype="0" conaffinity="0"/>
+        <!-- Shoulder housing -->
+        <geom name="shoulder_housing" type="cylinder" size="0.035 0.025" euler="1.5708 0 0"
+              material="joint_orange" mass="0.2" contype="0" conaffinity="0"/>
 
-        <!-- Link 2 (forearm) at end of link 1 -->
-        <body name="link2" pos="0.25 0 0">
-          <!-- Elbow joint: rotates in x-z plane around y-axis -->
-          <joint name="elbow" type="hinge" axis="0 1 0" range="-2.5 2.5"
-                 damping="0.3" armature="0.01"/>
+        <!-- Link 1 (upper arm) -->
+        <body name="link1" pos="0 0 0">
+          <!-- Shoulder joint: rotates in x-z plane around y-axis -->
+          <!-- Range [0, 1.5]: forward and upward, prevents arm going over-the-top backward -->
+          <joint name="shoulder" type="hinge" axis="0 1 0" range="0 1.5"
+                 damping="0.5" armature="0.02"/>
 
-          <!-- Link 2 geometry -->
-          <geom name="link2_geom" type="capsule" fromto="0 0 0 0.25 0 0" size="0.018"
-                material="arm_mat" mass="0.3"/>
+          <!-- Link 1 structure - robotic arm segment -->
+          <geom name="link1_base" type="cylinder" size="0.028 0.015" material="metal_blue" mass="0.1" contype="1" conaffinity="1"/>
+          <geom name="link1_main" type="capsule" fromto="0.015 0 0 0.235 0 0" size="0.022"
+                material="metal_blue" mass="0.4" contype="1" conaffinity="1"/>
+          <geom name="link1_end" type="cylinder" size="0.028 0.015" pos="0.25 0 0"
+                material="metal_blue" mass="0.1" contype="1" conaffinity="1"/>
 
-          <!-- End-effector site at tip of link 2 -->
-          <site name="ee_site" pos="0.25 0 0" size="0.015" rgba="0 1 0 1"/>
+          <!-- Elbow joint housing -->
+          <geom name="elbow_housing" type="cylinder" size="0.03 0.022" pos="0.25 0 0"
+                euler="1.5708 0 0" material="joint_orange" mass="0.15" contype="0" conaffinity="0"/>
+
+          <!-- Link 2 (forearm) at end of link 1 -->
+          <body name="link2" pos="0.25 0 0">
+            <!-- Elbow joint: rotates in x-z plane around y-axis -->
+            <!-- Range [-1.8, 0.3]: mostly folding back, slight forward bend -->
+            <joint name="elbow" type="hinge" axis="0 1 0" range="-1.8 0.3"
+                   damping="0.3" armature="0.01"/>
+
+            <!-- Link 2 structure -->
+            <geom name="link2_base" type="cylinder" size="0.024 0.012" material="metal_light" mass="0.08" contype="1" conaffinity="1"/>
+            <geom name="link2_main" type="capsule" fromto="0.012 0 0 0.20 0 0" size="0.018"
+                  material="metal_light" mass="0.25" contype="1" conaffinity="1"/>
+
+            <!-- Wrist/gripper mount -->
+            <geom name="wrist_mount" type="cylinder" size="0.022 0.015" pos="0.21 0 0"
+                  material="gripper_mat" mass="0.05" contype="1" conaffinity="1"/>
+
+            <!-- Gripper body -->
+            <body name="gripper" pos="0.23 0 0">
+              <!-- Gripper palm -->
+              <geom name="gripper_palm" type="box" size="0.015 0.025 0.012" material="gripper_mat" mass="0.03" contype="1" conaffinity="1"/>
+
+              <!-- Left finger (fixed, visual only) -->
+              <geom name="finger_left_base" type="box" pos="0.012 0.018 0" size="0.012 0.007 0.008"
+                    material="gripper_mat" mass="0.01" contype="1" conaffinity="1"/>
+              <geom name="finger_left_tip" type="box" pos="0.028 0.015 0" size="0.008 0.004 0.006"
+                    euler="0 0 -0.3" material="metal_light" mass="0.005" contype="1" conaffinity="1"/>
+
+              <!-- Right finger (fixed, visual only) -->
+              <geom name="finger_right_base" type="box" pos="0.012 -0.018 0" size="0.012 0.007 0.008"
+                    material="gripper_mat" mass="0.01" contype="1" conaffinity="1"/>
+              <geom name="finger_right_tip" type="box" pos="0.028 -0.015 0" size="0.008 0.004 0.006"
+                    euler="0 0 0.3" material="metal_light" mass="0.005" contype="1" conaffinity="1"/>
+            </body>
+
+            <!-- End-effector site at gripper center (between fingers) -->
+            <site name="ee_site" pos="0.26 0 0" size="0.012" rgba="0 1 0 0.5"/>
+          </body>
         </body>
       </body>
     </body>
@@ -78,19 +138,22 @@
 
   <!-- Position actuators for stable control -->
   <actuator>
-    <position name="shoulder_act" joint="shoulder" kp="50" ctrlrange="-2.0 2.0"/>
-    <position name="elbow_act" joint="elbow" kp="50" ctrlrange="-2.5 2.5"/>
+    <position name="base_act" joint="base" kp="40" ctrlrange="-3.14159 3.14159"/>
+    <position name="shoulder_act" joint="shoulder" kp="40" ctrlrange="0 1.5"/>
+    <position name="elbow_act" joint="elbow" kp="40" ctrlrange="-1.8 0.3"/>
   </actuator>
 
   <!-- Weld constraint for grasp (initially inactive) -->
   <equality>
-    <weld name="grasp_weld" body1="ball" body2="link2" relpose="0.25 0 0 1 0 0 0" active="false"/>
+    <weld name="grasp_weld" body1="ball" body2="link2" relpose="0.26 0 0 1 0 0 0" active="false"/>
   </equality>
 
-  <!-- Sensors for observation (optional, data also accessible via data.qpos etc.) -->
+  <!-- Sensors for observation -->
   <sensor>
+    <jointpos name="base_pos" joint="base"/>
     <jointpos name="shoulder_pos" joint="shoulder"/>
     <jointpos name="elbow_pos" joint="elbow"/>
+    <jointvel name="base_vel" joint="base"/>
     <jointvel name="shoulder_vel" joint="shoulder"/>
     <jointvel name="elbow_vel" joint="elbow"/>
     <framepos name="ee_pos" objtype="site" objname="ee_site"/>

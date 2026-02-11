@@ -205,18 +205,23 @@ def create_reward_computer(config: dict) -> RewardComputer:
     Returns:
         RewardComputer instance
     """
+    # Get reach-specific config
+    reach_config = config.get("reach", {})
+    grasp_config = config.get("grasp", {})
+
     reward_config = RewardConfig(
         max_reach=config.get("max_reach", 0.5),
         normalize_distance=config.get("normalize_distance", True),
         w_action_mag=config.get("w_action_mag", 0.01),
         w_action_change=config.get("w_action_change", 0.005),
         w_joint_vel=config.get("w_joint_vel", 0.0),
-        w_dist=config.get("w_dist", 1.0),
-        reach_success_bonus=config.get("reach", {}).get("success_bonus", 10.0),
-        attach_bonus=config.get("grasp", {}).get("attach_bonus", 2.0),
-        w_lift=config.get("grasp", {}).get("w_lift", 1.0),
-        w_hold_per_step=config.get("grasp", {}).get("w_hold_per_step", 0.1),
-        grasp_success_bonus=config.get("grasp", {}).get("success_bonus", 15.0),
+        # w_dist can be at top level OR under reach section
+        w_dist=reach_config.get("w_dist", config.get("w_dist", 1.0)),
+        reach_success_bonus=reach_config.get("success_bonus", 10.0),
+        attach_bonus=grasp_config.get("attach_bonus", 2.0),
+        w_lift=grasp_config.get("w_lift", 1.0),
+        w_hold_per_step=grasp_config.get("w_hold_per_step", 0.1),
+        grasp_success_bonus=grasp_config.get("success_bonus", 15.0),
     )
 
     return RewardComputer(reward_config)

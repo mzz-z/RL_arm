@@ -1,4 +1,4 @@
-"""MuJoCo model validation for the 2-DOF arm environment."""
+"""MuJoCo model validation for the 3-DOF arm environment."""
 
 import numpy as np
 import mujoco
@@ -24,9 +24,14 @@ def validate_model(model: mujoco.MjModel, data: mujoco.MjData) -> dict:
     ids = {}
 
     # Check joint count
-    assert model.nq >= 2, f"Expected at least 2 joint positions, got {model.nq}"
-    assert model.nv >= 2, f"Expected at least 2 joint velocities, got {model.nv}"
-    assert model.nu >= 2, f"Expected at least 2 actuators, got {model.nu}"
+    assert model.nq >= 3, f"Expected at least 3 joint positions, got {model.nq}"
+    assert model.nv >= 3, f"Expected at least 3 joint velocities, got {model.nv}"
+    assert model.nu >= 3, f"Expected at least 3 actuators, got {model.nu}"
+
+    # Verify base joint exists
+    base_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "base")
+    assert base_id >= 0, "Missing 'base' joint in model"
+    ids["base_joint"] = base_id
 
     # Verify shoulder joint exists
     shoulder_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "shoulder")
@@ -59,6 +64,10 @@ def validate_model(model: mujoco.MjModel, data: mujoco.MjData) -> dict:
     ids["grasp_weld"] = weld_id
 
     # Verify actuators
+    base_act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "base_act")
+    assert base_act_id >= 0, "Missing 'base_act' actuator"
+    ids["base_act"] = base_act_id
+
     shoulder_act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "shoulder_act")
     assert shoulder_act_id >= 0, "Missing 'shoulder_act' actuator"
     ids["shoulder_act"] = shoulder_act_id
@@ -68,6 +77,13 @@ def validate_model(model: mujoco.MjModel, data: mujoco.MjData) -> dict:
     ids["elbow_act"] = elbow_act_id
 
     # Verify actuator ranges match joint limits (approximately)
+    base_jnt_range = model.jnt_range[base_id]
+    base_act_range = model.actuator_ctrlrange[base_act_id]
+    assert np.allclose(base_jnt_range, base_act_range, atol=0.1), (
+        f"Base actuator range {base_act_range} doesn't match "
+        f"joint range {base_jnt_range}"
+    )
+
     shoulder_jnt_range = model.jnt_range[shoulder_id]
     shoulder_act_range = model.actuator_ctrlrange[shoulder_act_id]
     assert np.allclose(shoulder_jnt_range, shoulder_act_range, atol=0.1), (
@@ -84,6 +100,7 @@ def validate_model(model: mujoco.MjModel, data: mujoco.MjData) -> dict:
 
     # Store joint limits for controller
     ids["joint_limits"] = {
+        "base": tuple(base_jnt_range),
         "shoulder": tuple(shoulder_jnt_range),
         "elbow": tuple(elbow_jnt_range),
     }
@@ -107,6 +124,8 @@ def validate_model(model: mujoco.MjModel, data: mujoco.MjData) -> dict:
     ids["ball_qvel_addr"] = model.jnt_dofadr[ball_jnt_id]
 
     # Get arm joint qpos/qvel addresses
+    ids["base_qpos_addr"] = model.jnt_qposadr[base_id]
+    ids["base_qvel_addr"] = model.jnt_dofadr[base_id]
     ids["shoulder_qpos_addr"] = model.jnt_qposadr[shoulder_id]
     ids["elbow_qpos_addr"] = model.jnt_qposadr[elbow_id]
     ids["shoulder_qvel_addr"] = model.jnt_dofadr[shoulder_id]
@@ -124,34 +143,23 @@ def get_arm_geometry(model: mujoco.MjModel) -> dict:
     Returns:
         Dictionary with link lengths and max reach
     """
-    # Get link geom IDs
-    link1_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "link1_geom")
-    link2_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "link2_geom")
+    # Get link geom IDs (try both old and new naming conventions)
+    link1_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "link1_main")
+    if link1_geom_id < 0:
+        link1_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "link1_geom")
 
-    # For capsule geoms, size[0] is radius, fromto defines endpoints
-    # Calculate link lengths from geom positions
-    # Link1: fromto="0 0 0 0.25 0 0" means length 0.25
-    # Link2: fromto="0 0 0 0.25 0 0" means length 0.25
+    link2_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "link2_main")
+    if link2_geom_id < 0:
+        link2_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "link2_geom")
 
-    # Extract from fromto if available, otherwise use default
+    # Link lengths based on geometry:
+    # Link1: shoulder to elbow = 0.25m
+    # Link2: elbow to gripper center (ee_site at 0.26) = 0.26m
     link1_length = 0.25  # Default from XML
-    link2_length = 0.25  # Default from XML
+    link2_length = 0.26  # Updated for new gripper design (ee_site at 0.26)
 
-    # Try to get from geom data if capsule
-    if link1_geom_id >= 0:
-        geom_type = model.geom_type[link1_geom_id]
-        if geom_type == mujoco.mjtGeom.mjGEOM_CAPSULE:
-            # For capsules defined with fromto, calculate length
-            fromto = model.geom_pos[link1_geom_id]  # This might not work directly
-            # Fallback to hardcoded values based on XML
-            pass
-
-    if link2_geom_id >= 0:
-        geom_type = model.geom_type[link2_geom_id]
-        if geom_type == mujoco.mjtGeom.mjGEOM_CAPSULE:
-            pass
-
-    max_reach = link1_length + link2_length
+    # Max reach is to the gripper fingertips
+    max_reach = link1_length + link2_length  # 0.51m
 
     # Get table height
     table_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "table")

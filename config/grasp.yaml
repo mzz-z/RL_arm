@@ -5,6 +5,11 @@ env:
   task_mode: "grasp"
   max_episode_steps: 300      # More time for grasp + lift
 
+  # Slightly easier attachment for transfer learning
+  magnet:
+    attach_radius: 0.045      # Slightly larger than default (0.04)
+    attach_vel_threshold: 0.18  # Slightly more forgiving (0.15 default)
+
 reward:
   grasp:
     w_dist: 1.0
@@ -14,8 +19,11 @@ reward:
     success_bonus: 15.0
 
 ppo:
-  # May need more exploration for complex task
-  entropy_coef: 0.02
+  # Lower entropy to preserve reach behavior during transfer learning
+  entropy_coef: 0.005
+  # Slower LR decay for harder task
+  lr_schedule: "cosine"
+  lr_min: 1.0e-5
 
 # Curriculum for grasp (progressive difficulty)
 curriculum:

@@ -1,4 +1,4 @@
-"""Position target controller for the 2-DOF arm."""
+"""Position target controller for the 3-DOF arm."""
 
 import numpy as np
 import mujoco
@@ -24,7 +24,7 @@ class LowpassConfig:
 
 class PositionTargetController:
     """
-    Incremental position target controller for the 2-DOF arm.
+    Incremental position target controller for the 3-DOF arm.
 
     Policy outputs delta targets in [-1, 1], which are scaled
     and added to current targets. Targets are clipped to joint limits
@@ -49,7 +49,7 @@ class PositionTargetController:
 
         Args:
             action_scale: Radians per env step per unit action
-            joint_limits: Dict with 'shoulder' and 'elbow' limit tuples
+            joint_limits: Dict with 'base', 'shoulder' and 'elbow' limit tuples
             rate_limit: Optional rate limiting config
             lowpass: Optional low-pass filter config
         """
@@ -57,11 +57,13 @@ class PositionTargetController:
 
         # Joint limits
         self.q_min = np.array([
+            joint_limits["base"][0],
             joint_limits["shoulder"][0],
             joint_limits["elbow"][0],
         ], dtype=np.float64)
 
         self.q_max = np.array([
+            joint_limits["base"][1],
             joint_limits["shoulder"][1],
             joint_limits["elbow"][1],
         ], dtype=np.float64)
@@ -89,7 +91,7 @@ class PositionTargetController:
         Reset controller state.
 
         Args:
-            q_init: Initial joint angles (2,)
+            q_init: Initial joint angles (3,)
         """
         self.q_target = np.array(q_init, dtype=np.float64)
 
@@ -105,7 +107,7 @@ class PositionTargetController:
         Apply action to update targets and write to MuJoCo.
 
         Args:
-            action: Normalized action in [-1, 1], shape (2,)
+            action: Normalized action in [-1, 1], shape (3,)
             data: MuJoCo data object
 
         Returns:
@@ -142,7 +144,7 @@ class PositionTargetController:
         self.q_target = np.clip(new_target, self.q_min, self.q_max)
 
         # 7. Write to MuJoCo controls (position actuators)
-        data.ctrl[:2] = self.q_target
+        data.ctrl[:3] = self.q_target
 
         return self.q_target.copy()
 
@@ -154,8 +156,9 @@ class PositionTargetController:
     def joint_limits(self) -> dict:
         """Return joint limits dict."""
         return {
-            "shoulder": (self.q_min[0], self.q_max[0]),
-            "elbow": (self.q_min[1], self.q_max[1]),
+            "base": (self.q_min[0], self.q_max[0]),
+            "shoulder": (self.q_min[1], self.q_max[1]),
+            "elbow": (self.q_min[2], self.q_max[2]),
         }
 
     def get_debug_info(self) -> dict:

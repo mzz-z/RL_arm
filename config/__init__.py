@@ -40,17 +40,21 @@ def load_config(config_path: Union[str, Path]) -> dict:
     config_path = Path(config_path)
     config_dir = config_path.parent
 
-    # Load default config
+    # Load default config if it exists in the same directory
     default_path = config_dir / "default.yaml"
-    with open(default_path) as f:
-        config = yaml.safe_load(f)
+    if default_path.exists() and config_path.name != "default.yaml":
+        with open(default_path) as f:
+            config = yaml.safe_load(f)
 
-    # Load and merge task-specific overrides if not default.yaml
-    if config_path.name != "default.yaml":
+        # Load and merge task-specific overrides
         with open(config_path) as f:
             overrides = yaml.safe_load(f)
         if overrides:
             config = deep_merge(config, overrides)
+    else:
+        # Standalone config (e.g., saved in a run directory) — load directly
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
 
     return config
 

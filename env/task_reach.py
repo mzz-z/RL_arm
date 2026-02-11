@@ -14,6 +14,7 @@ class ReachTaskConfig:
     reach_radius: float = 0.05  # Success distance threshold (meters)
     dwell_steps: int = 5  # Steps within radius to succeed
     ee_vel_threshold: float = 0.1  # Max ee velocity for success (m/s)
+    w_delta_dist: float = 5.0  # Weight for delta distance reward (getting closer)
 
 
 class ReachTask:
@@ -43,10 +44,12 @@ class ReachTask:
 
         # Task state
         self.dwell_count = 0
+        self.prev_dist = None  # For delta distance reward
 
     def reset(self):
         """Reset task state for new episode."""
         self.dwell_count = 0
+        self.prev_dist = None
 
     def check_success(
         self,
@@ -105,7 +108,7 @@ class ReachTask:
         # Check success
         is_dwelling, is_success = self.check_success(dist, ee_vel_magnitude)
 
-        # Compute reward
+        # Compute base reward
         reward, terms = self.reward_computer.compute_reach_reward(
             dist=dist,
             action=action,
@@ -113,6 +116,21 @@ class ReachTask:
             joint_vel=joint_vel,
             is_success=is_success,
         )
+
+        # Add delta distance reward (reward for getting closer)
+        if self.prev_dist is not None:
+            # Positive if we got closer, negative if we moved away
+            delta = self.prev_dist - dist
+            # Normalize by max_reach for scale consistency
+            delta_normalized = delta / self.reward_computer.config.max_reach
+            delta_reward = self.config.w_delta_dist * delta_normalized
+            terms["delta_dist"] = delta_reward
+            reward += delta_reward
+        else:
+            terms["delta_dist"] = 0.0
+
+        # Update previous distance for next step
+        self.prev_dist = dist
 
         # Add task-specific info to terms
         terms["is_dwelling"] = float(is_dwelling)
@@ -145,6 +163,7 @@ def create_reach_task(
         reach_radius=task_config.get("reach_radius", 0.05),
         dwell_steps=task_config.get("dwell_steps", 5),
         ee_vel_threshold=task_config.get("ee_vel_threshold", 0.1),
+        w_delta_dist=task_config.get("w_delta_dist", 5.0),
     )
 
     return ReachTask(config, reward_computer)

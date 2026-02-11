@@ -5,32 +5,82 @@ env:
   task_mode: "reach"
   max_episode_steps: 200
 
+  # Initial joint state - start more contracted so EE is mid-range
+  init_joints:
+    base_range: [-0.1, 0.1]       # Small initial base rotation
+    shoulder_range: [0.4, 0.8]    # More bent shoulder
+    elbow_range: [-1.2, -0.6]    # More bent elbow
+    vel_noise_std: 0.01
+
+  # Task parameters
+  reach:
+    reach_radius: 0.10        # Larger success radius for easier learning (tighten later)
+    dwell_steps: 2            # Quick success once close
+    w_delta_dist: 25.0        # STRONG reward for getting closer (key for learning!)
+
 reward:
   reach:
-    w_dist: 1.0
-    success_bonus: 10.0
+    # NO distance penalty - it confuses learning by punishing even while improving
+    w_dist: 0.0
+    success_bonus: 50.0       # Large success bonus for clear signal
+  # Minimal smoothness penalties (don't discourage movement)
+  w_action_mag: 0.0
+  w_action_change: 0.0
 
-# Curriculum for reach (progressive difficulty)
+ppo:
+  # Lower entropy to prevent divergence (std was increasing to 1.5+)
+  entropy_coef: 0.001
+  # CONSTANT learning rate
+  lr_schedule: "constant"
+  lr: 3.0e-4
+  # More parallel environments for better sample diversity
+  num_envs: 8
+  rollout_steps: 2048
+
+# Curriculum for reach (progressive difficulty with 3D spawning)
+# Progressive azimuth forces the policy to learn base rotation
 curriculum:
   enabled: true
   metric: "success_rate"
   patience: 3
 
   stages:
-    # Stage 1: Easy (close targets)
+    # Stage 1: EASY - ball spawns near EE, small azimuth for base rotation
     - threshold: 0.5
       spawn:
-        radius_min: 0.20
-        radius_max: 0.28
+        radius_min: 0.35
+        radius_max: 0.45
+        angle_min: -0.1
+        angle_max: 0.2
+        azimuth_min: -0.3
+        azimuth_max: 0.3
 
-    # Stage 2: Medium
+    # Stage 2: Slightly wider range with more azimuth
+    - threshold: 0.6
+      spawn:
+        radius_min: 0.25
+        radius_max: 0.42
+        angle_min: 0.2
+        angle_max: 0.8
+        azimuth_min: -0.8
+        azimuth_max: 0.8
+
+    # Stage 3: Medium (most of workspace, wider azimuth)
     - threshold: 0.7
       spawn:
-        radius_min: 0.15
-        radius_max: 0.35
+        radius_min: 0.20
+        radius_max: 0.45
+        angle_min: 0.1
+        angle_max: 0.9
+        azimuth_min: -1.5
+        azimuth_max: 1.5
 
-    # Stage 3: Full difficulty
-    - threshold: 0.85
+    # Stage 4: Full difficulty (full reachable workspace, full rotation)
+    - threshold: 0.8
       spawn:
-        radius_min: 0.12
-        radius_max: 0.42
+        radius_min: 0.15
+        radius_max: 0.48
+        angle_min: 0.0
+        angle_max: 1.0
+        azimuth_min: -3.14159
+        azimuth_max: 3.14159

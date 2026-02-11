@@ -32,7 +32,7 @@ env:
   frame_skip: 4               # Sim steps per env step
   timestep: 0.002             # MuJoCo timestep (seconds)
 
-  # Arm configuration (vertical x-z plane)
+  # Arm configuration (3-DOF with base rotation)
   arm:
     link1_length: 0.25        # meters
     link2_length: 0.25        # meters
@@ -50,17 +50,19 @@ env:
   spawn:
     radius_min: 0.15          # Min radial distance from base
     radius_max: 0.40          # Max radial distance (< link1 + link2)
-    angle_min: -1.0           # Angular range (radians, 0 = forward)
-    angle_max: 1.0
-    # IMPORTANT: Arm is planar (x-z plane, y=0). Ball must spawn on the plane
-    # for the reach task to be achievable. Keep y_min = y_max = 0.
-    y_min: 0.0
-    y_max: 0.0
+    # Elevation angle: 0 is horizontal, positive is upward
+    angle_min: 0.0            # At table level
+    angle_max: 0.6            # Slightly upward (within reach)
+    # Azimuth angle: rotation around z-axis for 3D spawning
+    # Default: no azimuth spread (balls spawn along x-axis)
+    azimuth_min: 0.0
+    azimuth_max: 0.0
 
-  # Initial arm state
+  # Initial arm state (within joint limits)
   init_joints:
-    shoulder_range: [-0.3, 0.3]
-    elbow_range: [-0.3, 0.3]
+    base_range: [-0.1, 0.1]
+    shoulder_range: [0.1, 0.5]
+    elbow_range: [-0.5, 0.0]
     vel_noise_std: 0.01
 
   # Reach task parameters (Phase 1)
@@ -99,10 +101,11 @@ control:
     enabled: false
     alpha: 0.3                # Smoothing factor
 
-  # Joint limits (radians)
+  # Joint limits (radians) - tuned to keep arm in useful workspace
   joint_limits:
-    shoulder: [-2.0, 2.0]
-    elbow: [-2.5, 2.5]
+    base: [-3.14159, 3.14159]
+    shoulder: [0.0, 1.5]
+    elbow: [-1.8, 0.3]
 
 reward:
   # Normalization

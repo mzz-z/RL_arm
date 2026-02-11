@@ -33,9 +33,10 @@ def make_eval_env(config: dict) -> MujocoArmEnv:
         spawn_radius_max=env_config.get("spawn", {}).get("radius_max", 0.40),
         spawn_angle_min=env_config.get("spawn", {}).get("angle_min", -1.0),
         spawn_angle_max=env_config.get("spawn", {}).get("angle_max", 1.0),
-        spawn_y_min=env_config.get("spawn", {}).get("y_min", -0.15),
-        spawn_y_max=env_config.get("spawn", {}).get("y_max", 0.15),
+        spawn_azimuth_min=env_config.get("spawn", {}).get("azimuth_min", 0.0),
+        spawn_azimuth_max=env_config.get("spawn", {}).get("azimuth_max", 0.0),
         # Initial joint state
+        init_base_range=tuple(env_config.get("init_joints", {}).get("base_range", [-0.1, 0.1])),
         init_shoulder_range=tuple(env_config.get("init_joints", {}).get("shoulder_range", [-0.3, 0.3])),
         init_elbow_range=tuple(env_config.get("init_joints", {}).get("elbow_range", [-0.3, 0.3])),
         init_vel_noise_std=env_config.get("init_joints", {}).get("vel_noise_std", 0.01),
@@ -190,8 +191,9 @@ def evaluate_checkpoint(
     from rl.buffer import create_buffer
 
     # Get dimensions
-    obs_dim = 14  # ObservationBuilder.OBS_DIM
-    action_dim = 2
+    from env.observations import ObservationBuilder
+    obs_dim = ObservationBuilder.OBS_DIM
+    action_dim = 3
 
     # Create policy
     policy = create_actor_critic(config.get("model", {}), obs_dim, action_dim)

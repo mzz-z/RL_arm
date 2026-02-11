@@ -10,6 +10,11 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Optional, Tuple, Union
+
+# Add project root to path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 from gymnasium.vector import SyncVectorEnv, AsyncVectorEnv
 
 from env.mujoco_env import MujocoArmEnv
@@ -86,9 +91,10 @@ def _create_single_env(
         spawn_radius_max=env_config.get("spawn", {}).get("radius_max", 0.40),
         spawn_angle_min=env_config.get("spawn", {}).get("angle_min", -1.0),
         spawn_angle_max=env_config.get("spawn", {}).get("angle_max", 1.0),
-        spawn_y_min=env_config.get("spawn", {}).get("y_min", -0.15),
-        spawn_y_max=env_config.get("spawn", {}).get("y_max", 0.15),
+        spawn_azimuth_min=env_config.get("spawn", {}).get("azimuth_min", 0.0),
+        spawn_azimuth_max=env_config.get("spawn", {}).get("azimuth_max", 0.0),
         # Initial joint state
+        init_base_range=tuple(env_config.get("init_joints", {}).get("base_range", [-0.1, 0.1])),
         init_shoulder_range=tuple(env_config.get("init_joints", {}).get("shoulder_range", [-0.3, 0.3])),
         init_elbow_range=tuple(env_config.get("init_joints", {}).get("elbow_range", [-0.3, 0.3])),
         init_vel_noise_std=env_config.get("init_joints", {}).get("vel_noise_std", 0.01),
@@ -96,6 +102,7 @@ def _create_single_env(
         reach_radius=env_config.get("reach", {}).get("reach_radius", 0.05),
         dwell_steps=env_config.get("reach", {}).get("dwell_steps", 5),
         ee_vel_threshold=env_config.get("reach", {}).get("ee_vel_threshold", 0.1),
+        w_delta_dist=env_config.get("reach", {}).get("w_delta_dist", 5.0),
         attach_radius=env_config.get("magnet", {}).get("attach_radius", 0.04),
         attach_vel_threshold=env_config.get("magnet", {}).get("attach_vel_threshold", 0.15),
         lift_height=env_config.get("lift", {}).get("lift_height", 0.1),
@@ -401,8 +408,8 @@ def train(
     print(f"Created {num_envs} parallel environments ({env_type})")
 
     # Get dimensions
-    obs_dim = ObservationBuilder.OBS_DIM  # 14
-    action_dim = 2
+    obs_dim = ObservationBuilder.OBS_DIM  # 16
+    action_dim = 3
 
     # Create policy
     policy = create_actor_critic(model_config, obs_dim, action_dim)
