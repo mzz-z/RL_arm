@@ -78,7 +78,7 @@ def validate_config(config: dict) -> None:
 
     # Spawn range is reachable
     arm = config.get("env", {}).get("arm", {})
-    max_reach = arm.get("link1_length", 0.25) + arm.get("link2_length", 0.25)
+    max_reach = arm.get("link1_length", 0.22) + arm.get("link2_length", 0.18) + arm.get("link3_length", 0.10)
     spawn_max = config.get("env", {}).get("spawn", {}).get("radius_max", 0.4)
     assert spawn_max < max_reach, f"spawn.radius_max ({spawn_max}) >= arm reach ({max_reach})"
 
