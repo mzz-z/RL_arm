@@ -20,6 +20,8 @@ class RewardConfig:
 
     # Phase 1: Reach rewards
     w_dist: float = 1.0  # Weight on distance (negative)
+    w_proximity: float = 0.0  # Exponential proximity bonus (stronger gradient near target)
+    proximity_alpha: float = 5.0  # Steepness of proximity curve
     reach_success_bonus: float = 10.0  # Bonus for completing reach
 
     # Phase 2: Grasp rewards
@@ -70,6 +72,14 @@ class RewardComputer:
         else:
             r_dist = -dist
         terms["dist"] = self.config.w_dist * r_dist
+
+        # Exponential proximity bonus (creates bowl-shaped attractor near target)
+        if self.config.w_proximity > 0:
+            norm_dist = dist / self.config.max_reach
+            r_proximity = np.exp(-self.config.proximity_alpha * norm_dist)
+            terms["proximity"] = self.config.w_proximity * r_proximity
+        else:
+            terms["proximity"] = 0.0
 
         # Action magnitude penalty
         r_action_mag = -np.sum(action**2)
@@ -195,19 +205,25 @@ class RewardComputer:
         return total, terms
 
 
-def create_reward_computer(config: dict) -> RewardComputer:
+def create_reward_computer(config: dict, task_mode: str = "reach") -> RewardComputer:
     """
     Create RewardComputer from config dict.
 
     Args:
         config: Dictionary with reward parameters
+        task_mode: "reach" or "grasp" — selects which section's w_dist to use
 
     Returns:
         RewardComputer instance
     """
-    # Get reach-specific config
     reach_config = config.get("reach", {})
     grasp_config = config.get("grasp", {})
+
+    # w_dist: use the section matching the active task mode
+    if task_mode == "grasp":
+        w_dist = grasp_config.get("w_dist", config.get("w_dist", 1.0))
+    else:
+        w_dist = reach_config.get("w_dist", config.get("w_dist", 1.0))
 
     reward_config = RewardConfig(
         max_reach=config.get("max_reach", 0.5),
@@ -215,8 +231,9 @@ def create_reward_computer(config: dict) -> RewardComputer:
         w_action_mag=config.get("w_action_mag", 0.01),
         w_action_change=config.get("w_action_change", 0.005),
         w_joint_vel=config.get("w_joint_vel", 0.0),
-        # w_dist can be at top level OR under reach section
-        w_dist=reach_config.get("w_dist", config.get("w_dist", 1.0)),
+        w_dist=w_dist,
+        w_proximity=reach_config.get("w_proximity", 0.0),
+        proximity_alpha=reach_config.get("proximity_alpha", 5.0),
         reach_success_bonus=reach_config.get("success_bonus", 10.0),
         attach_bonus=grasp_config.get("attach_bonus", 2.0),
         w_lift=grasp_config.get("w_lift", 1.0),

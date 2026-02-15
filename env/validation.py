@@ -1,4 +1,4 @@
-"""MuJoCo model validation for the 3-DOF arm environment."""
+"""MuJoCo model validation for the 4-DOF arm environment."""
 
 import numpy as np
 import mujoco
@@ -23,10 +23,10 @@ def validate_model(model: mujoco.MjModel, data: mujoco.MjData) -> dict:
     """
     ids = {}
 
-    # Check joint count
-    assert model.nq >= 3, f"Expected at least 3 joint positions, got {model.nq}"
-    assert model.nv >= 3, f"Expected at least 3 joint velocities, got {model.nv}"
-    assert model.nu >= 3, f"Expected at least 3 actuators, got {model.nu}"
+    # Check joint count (4 arm hinge + 7 ball freejoint = 11 qpos, 4 + 6 = 10 qvel)
+    assert model.nq >= 4, f"Expected at least 4 joint positions, got {model.nq}"
+    assert model.nv >= 4, f"Expected at least 4 joint velocities, got {model.nv}"
+    assert model.nu >= 4, f"Expected at least 4 actuators, got {model.nu}"
 
     # Verify base joint exists
     base_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "base")
@@ -43,6 +43,11 @@ def validate_model(model: mujoco.MjModel, data: mujoco.MjData) -> dict:
     assert elbow_id >= 0, "Missing 'elbow' joint in model"
     ids["elbow_joint"] = elbow_id
 
+    # Verify wrist joint exists
+    wrist_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "wrist")
+    assert wrist_id >= 0, "Missing 'wrist' joint in model"
+    ids["wrist_joint"] = wrist_id
+
     # Verify ee_site exists
     ee_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "ee_site")
     assert ee_site_id >= 0, "Missing 'ee_site' in model"
@@ -53,10 +58,15 @@ def validate_model(model: mujoco.MjModel, data: mujoco.MjData) -> dict:
     assert ball_id >= 0, "Missing 'ball' body in model"
     ids["ball_body"] = ball_id
 
-    # Verify link2 body exists (for weld attachment)
+    # Verify link2 body exists
     link2_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "link2")
     assert link2_id >= 0, "Missing 'link2' body in model"
     ids["link2_body"] = link2_id
+
+    # Verify link3 body exists (for weld attachment)
+    link3_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "link3")
+    assert link3_id >= 0, "Missing 'link3' body in model"
+    ids["link3_body"] = link3_id
 
     # Verify weld constraint exists
     weld_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_EQUALITY, "grasp_weld")
@@ -75,6 +85,10 @@ def validate_model(model: mujoco.MjModel, data: mujoco.MjData) -> dict:
     elbow_act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "elbow_act")
     assert elbow_act_id >= 0, "Missing 'elbow_act' actuator"
     ids["elbow_act"] = elbow_act_id
+
+    wrist_act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "wrist_act")
+    assert wrist_act_id >= 0, "Missing 'wrist_act' actuator"
+    ids["wrist_act"] = wrist_act_id
 
     # Verify actuator ranges match joint limits (approximately)
     base_jnt_range = model.jnt_range[base_id]
@@ -98,11 +112,19 @@ def validate_model(model: mujoco.MjModel, data: mujoco.MjData) -> dict:
         f"joint range {elbow_jnt_range}"
     )
 
+    wrist_jnt_range = model.jnt_range[wrist_id]
+    wrist_act_range = model.actuator_ctrlrange[wrist_act_id]
+    assert np.allclose(wrist_jnt_range, wrist_act_range, atol=0.1), (
+        f"Wrist actuator range {wrist_act_range} doesn't match "
+        f"joint range {wrist_jnt_range}"
+    )
+
     # Store joint limits for controller
     ids["joint_limits"] = {
         "base": tuple(base_jnt_range),
         "shoulder": tuple(shoulder_jnt_range),
         "elbow": tuple(elbow_jnt_range),
+        "wrist": tuple(wrist_jnt_range),
     }
 
     # Test forward kinematics
@@ -130,6 +152,8 @@ def validate_model(model: mujoco.MjModel, data: mujoco.MjData) -> dict:
     ids["elbow_qpos_addr"] = model.jnt_qposadr[elbow_id]
     ids["shoulder_qvel_addr"] = model.jnt_dofadr[shoulder_id]
     ids["elbow_qvel_addr"] = model.jnt_dofadr[elbow_id]
+    ids["wrist_qpos_addr"] = model.jnt_qposadr[wrist_id]
+    ids["wrist_qvel_addr"] = model.jnt_dofadr[wrist_id]
 
     print("Model validation passed")
 
@@ -152,21 +176,31 @@ def get_arm_geometry(model: mujoco.MjModel) -> dict:
     if link2_geom_id < 0:
         link2_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "link2_geom")
 
+    link3_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "link3_main")
+
     # Link lengths based on geometry:
-    # Link1: shoulder to elbow = 0.25m
-    # Link2: elbow to gripper center (ee_site at 0.26) = 0.26m
-    link1_length = 0.25  # Default from XML
-    link2_length = 0.26  # Updated for new gripper design (ee_site at 0.26)
+    # Link1: shoulder to elbow = 0.22m
+    # Link2: elbow to wrist = 0.18m
+    # Link3: wrist to ee_site (0.13m offset) = 0.13m
+    link1_length = 0.22
+    link2_length = 0.18
+    link3_length = 0.13
 
-    # Max reach is to the gripper fingertips
-    max_reach = link1_length + link2_length  # 0.51m
+    # Max reach is sum of all link lengths including ee offset
+    max_reach = link1_length + link2_length + link3_length  # ~0.53m
 
-    # Get table height
+    # Get table height (surface = body center z + table_top half-thickness)
     table_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "table")
-    table_height = 0.4  # Default from XML
+    table_height = 0.42  # Default: body z (0.4) + half-thickness (0.02)
     if table_body_id >= 0:
         table_pos = model.body_pos[table_body_id]
-        table_height = table_pos[2]
+        # Add table_top geom half-height to get actual surface
+        table_top_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "table_top")
+        if table_top_id >= 0:
+            table_half_height = model.geom_size[table_top_id][2]  # z half-size of box
+            table_height = table_pos[2] + table_half_height
+        else:
+            table_height = table_pos[2]
 
     # Get ball radius
     ball_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "ball_geom")
@@ -177,6 +211,7 @@ def get_arm_geometry(model: mujoco.MjModel) -> dict:
     return {
         "link1_length": link1_length,
         "link2_length": link2_length,
+        "link3_length": link3_length,
         "max_reach": max_reach,
         "table_height": table_height,
         "ball_radius": ball_radius,

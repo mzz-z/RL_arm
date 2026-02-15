@@ -103,7 +103,7 @@ class TanhGaussianPolicy:
         Returns:
             Entropy (per sample, summed over action dims)
         """
-        return self.normal.entropy().sum(dim=-1)
+        return self.normal.entropy().mean(dim=-1)
 
 
 class ActorCritic(nn.Module):

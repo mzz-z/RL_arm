@@ -59,6 +59,7 @@ class GraspTask:
         self.just_attached = False
         self.hold_count = 0
         self.ever_attached = False
+        self.ever_at_height = False
 
         # Reference to data (set during reset)
         self._data: Optional[mujoco.MjData] = None
@@ -75,6 +76,7 @@ class GraspTask:
         self.just_attached = False
         self.hold_count = 0
         self.ever_attached = False
+        self.ever_at_height = False
 
         # Deactivate weld constraint
         data.eq_active[self.weld_id] = 0
@@ -140,6 +142,7 @@ class GraspTask:
 
         if is_at_height:
             self.hold_count += 1
+            self.ever_at_height = True
         else:
             self.hold_count = 0
 
@@ -230,6 +233,7 @@ class GraspTask:
             "just_attached": self.just_attached,
             "hold_count": self.hold_count,
             "ever_attached": self.ever_attached,
+            "lift_success": self.ever_at_height,
         }
 
 

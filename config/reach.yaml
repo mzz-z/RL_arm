@@ -1,85 +1,123 @@
 # reach.yaml - Phase 1 configuration (reach task)
 # Inherits from default.yaml, overrides specific values.
-
+#
+# KEY DESIGN PRINCIPLES:
+# 1. Proximity-only reward (no negative distance term) → eliminates "do nothing" local minimum
+# 2. ZERO action penalties → agent can explore freely without being punished
+# 3. Stage 1 spawns balls near the EE starting position → guarantees early successes
+# 4. Azimuth in ALL stages → base rotation learned from the start
+# 5. Ball collision DISABLED for reach → arm passes through ball (phantom target)
+# 6. HEAVY guide assistance (0.90) with slow annealing → guide does the work early
 env:
   task_mode: "reach"
   max_episode_steps: 200
 
-  # Initial joint state - start more contracted so EE is mid-range
+  # Jacobian-transpose guided action (residual RL)
+  # HEAVY: 90% guide initially, slow anneal, keep 10% residual guide forever
+  guide:
+    enabled: true
+    alpha_initial: 0.90    # Heavy guidance — guide does most of the work
+    alpha_final: 0.1       # Keep small guide assist even at end
+    anneal_fraction: 0.9   # Anneal very slowly over 90% of training
+
+  # Initial joint state
+  # Shoulder/elbow set so EE starts at roughly (0.52, 0, 0.50) in world coords
+  # Base range kept moderate so EE faces roughly toward Stage 1 balls
   init_joints:
-    base_range: [-0.1, 0.1]       # Small initial base rotation
-    shoulder_range: [0.4, 0.8]    # More bent shoulder
-    elbow_range: [-1.2, -0.6]    # More bent elbow
+    base_range: [-0.3, 0.3]       # Moderate: face roughly forward for Stage 1 compatibility
+    shoulder_range: [0.1, 0.7]    # Wide range to prevent "optimal start" syndrome
+    elbow_range: [-0.6, -0.1]    # Moderately bent (arm fairly extended)
+    wrist_range: [-0.3, 0.3]     # Small initial wrist pitch
     vel_noise_std: 0.01
 
   # Task parameters
   reach:
-    reach_radius: 0.10        # Larger success radius for easier learning (tighten later)
-    dwell_steps: 2            # Quick success once close
-    w_delta_dist: 25.0        # STRONG reward for getting closer (key for learning!)
+    reach_radius: 0.12        # 12cm default (overridden per-stage by curriculum)
+    dwell_steps: 1            # Instant success — just get close enough
+    ee_vel_threshold: 0.5     # Relaxed velocity gate
+    w_delta_dist: 5.0         # Directional reward for getting closer
 
 reward:
   reach:
-    # NO distance penalty - it confuses learning by punishing even while improving
-    w_dist: 0.0
-    success_bonus: 50.0       # Large success bonus for clear signal
-  # Minimal smoothness penalties (don't discourage movement)
+    w_dist: 0.0               # DISABLED: negative distance term creates "do nothing" local minimum
+    w_proximity: 1.0          # PRIMARY: exp(-alpha*d/max_reach), always positive, peaks at target
+    proximity_alpha: 8.0      # Steeper proximity curve — stronger pull near target
+    success_bonus: 50.0       # Big terminal bonus for reaching
+  # ALL action penalties DISABLED for reach: the cost of exploring must be zero
+  # so PPO doesn't learn that "do nothing" is optimal under exploration noise
   w_action_mag: 0.0
   w_action_change: 0.0
+  w_joint_vel: 0.0
+
+# Low-pass smoothing for fluid arm motion
+# alpha=0.4 means each step the target moves 40% toward the commanded position
+# This eliminates jitter/oscillation without reward penalties (no "lazy agent" risk)
+control:
+  lowpass:
+    enabled: true
+    alpha: 0.4
+
+# Training assist: warm-start policy via behavioral cloning on the guide
+training_assist:
+  bc_warmup_steps: 5000       # Pre-train policy to imitate guide (0 = disabled)
 
 ppo:
-  # Lower entropy to prevent divergence (std was increasing to 1.5+)
-  entropy_coef: 0.001
-  # CONSTANT learning rate
-  lr_schedule: "constant"
+  entropy_coef: 0.01          # Higher entropy for more exploration (was 0.005)
+  lr_schedule: "cosine"
+  lr_min: 3.0e-5
   lr: 3.0e-4
-  # More parallel environments for better sample diversity
   num_envs: 8
   rollout_steps: 2048
 
-# Curriculum for reach (progressive difficulty with 3D spawning)
-# Progressive azimuth forces the policy to learn base rotation
+# Curriculum for reach (progressive difficulty)
+# Stage 1 is critical: VERY forgiving radius (30cm!) + balls near EE start position
+# Ball collision is disabled, so the arm passes through — pure distance check.
 curriculum:
   enabled: true
   metric: "success_rate"
-  patience: 3
+  patience: 2
 
   stages:
-    # Stage 1: EASY - ball spawns near EE, small azimuth for base rotation
-    - threshold: 0.5
+    # Stage 1: "Gimme" — balls spawn right where the EE starts
+    # 30cm success radius = almost impossible to miss with guide
+    - threshold: 0.4
+      reach_radius: 0.30
       spawn:
-        radius_min: 0.35
-        radius_max: 0.45
-        angle_min: -0.1
-        angle_max: 0.2
-        azimuth_min: -0.3
-        azimuth_max: 0.3
+        radius_min: 0.40
+        radius_max: 0.52
+        angle_min: 0.0
+        angle_max: 0.5
+        azimuth_min: -0.2
+        azimuth_max: 0.2
 
-    # Stage 2: Slightly wider range with more azimuth
-    - threshold: 0.6
+    # Stage 2: Wider range, tighter radius
+    - threshold: 0.5
+      reach_radius: 0.20
       spawn:
         radius_min: 0.25
-        radius_max: 0.42
-        angle_min: 0.2
-        angle_max: 0.8
+        radius_max: 0.52
+        angle_min: 0.0
+        angle_max: 0.60
         azimuth_min: -0.8
         azimuth_max: 0.8
 
-    # Stage 3: Medium (most of workspace, wider azimuth)
-    - threshold: 0.7
+    # Stage 3: Full vertical range + wide azimuth
+    - threshold: 0.6
+      reach_radius: 0.14
       spawn:
-        radius_min: 0.20
-        radius_max: 0.45
-        angle_min: 0.1
-        angle_max: 0.9
+        radius_min: 0.15
+        radius_max: 0.52
+        angle_min: 0.0
+        angle_max: 0.80
         azimuth_min: -1.5
         azimuth_max: 1.5
 
-    # Stage 4: Full difficulty (full reachable workspace, full rotation)
-    - threshold: 0.8
+    # Stage 4: Full 360° rotation, final precision
+    - threshold: 0.7
+      reach_radius: 0.10
       spawn:
         radius_min: 0.15
-        radius_max: 0.48
+        radius_max: 0.52
         angle_min: 0.0
         angle_max: 1.0
         azimuth_min: -3.14159

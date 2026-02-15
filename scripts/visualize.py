@@ -43,6 +43,7 @@ def create_env_with_viewer(config: dict) -> MujocoArmEnv:
         init_base_range=tuple(env_config.get("init_joints", {}).get("base_range", [-0.1, 0.1])),
         init_shoulder_range=tuple(env_config.get("init_joints", {}).get("shoulder_range", [-0.3, 0.3])),
         init_elbow_range=tuple(env_config.get("init_joints", {}).get("elbow_range", [-0.3, 0.3])),
+        init_wrist_range=tuple(env_config.get("init_joints", {}).get("wrist_range", [-0.3, 0.3])),
         # Task parameters
         reach_radius=env_config.get("reach", {}).get("reach_radius", 0.05),
         dwell_steps=env_config.get("reach", {}).get("dwell_steps", 5),
@@ -66,7 +67,7 @@ def load_policy(checkpoint_path: str, config: dict, device: str = "cpu"):
 
     from env.observations import ObservationBuilder
     obs_dim = ObservationBuilder.OBS_DIM
-    action_dim = 3
+    action_dim = 4
 
     policy = create_actor_critic(config.get("model", {}), obs_dim, action_dim)
     buffer = create_buffer(config.get("ppo", {}), obs_dim, action_dim, device)
@@ -156,12 +157,31 @@ def run_episode(env, policy_fn, render_delay: float = 0.02, verbose: bool = True
     }
 
 
+def preview_episode(env, policy_fn):
+    """
+    Run an episode without rendering to check if it succeeds.
+
+    Returns:
+        (is_success, seed) — the seed used so we can replay it
+    """
+    seed = np.random.randint(0, 100000)
+    obs, info = env.reset(seed=seed)
+    done = False
+    while not done:
+        action = policy_fn(obs)
+        obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+    return info.get("is_success", False), seed
+
+
 def visualize_trained_policy(
     checkpoint_path: str,
     config_path: str = None,
     num_episodes: int = 5,
     device: str = "cpu",
     render_delay: float = 0.02,
+    success_only: bool = False,
+    guide_alpha: float = 0.0,
 ):
     """
     Visualize a trained policy.
@@ -172,6 +192,7 @@ def visualize_trained_policy(
         num_episodes: Number of episodes to run
         device: Device for policy
         render_delay: Delay between frames
+        success_only: If True, only show successful episodes (pre-screen without rendering)
     """
     checkpoint_path = Path(checkpoint_path)
 
@@ -190,27 +211,107 @@ def visualize_trained_policy(
     print(f"Loading checkpoint: {checkpoint_path}")
     ppo = load_policy(str(checkpoint_path), config, device)
 
-    # Create environment
-    env = create_env_with_viewer(config)
-    print("Created environment with viewer")
-
     # Define policy function
     def policy_fn(obs):
         action, _, _, _ = ppo.get_action(obs, deterministic=True)
         return action
 
+    if guide_alpha > 0:
+        print(f"Guide alpha: {guide_alpha}")
+
+    # If success_only, pre-screen episodes without rendering to find winning seeds
+    winning_seeds = []
+    if success_only:
+        print(f"\nPre-screening for successful episodes (target: {num_episodes})...")
+        # Create a headless env for pre-screening
+        screen_env = create_env_with_viewer.__wrapped__(config) if hasattr(create_env_with_viewer, '__wrapped__') else None
+        # Just create a non-rendering env
+        env_config = config.get("env", {})
+        control_config = config.get("control", {})
+        reward_config = config.get("reward", {})
+        screen_env = MujocoArmEnv(
+            task_mode=env_config.get("task_mode", "reach"),
+            max_episode_steps=env_config.get("max_episode_steps", 200),
+            frame_skip=env_config.get("frame_skip", 4),
+            render_mode=None,
+            spawn_radius_min=env_config.get("spawn", {}).get("radius_min", 0.15),
+            spawn_radius_max=env_config.get("spawn", {}).get("radius_max", 0.40),
+            spawn_angle_min=env_config.get("spawn", {}).get("angle_min", -1.0),
+            spawn_angle_max=env_config.get("spawn", {}).get("angle_max", 1.0),
+            spawn_azimuth_min=env_config.get("spawn", {}).get("azimuth_min", 0.0),
+            spawn_azimuth_max=env_config.get("spawn", {}).get("azimuth_max", 0.0),
+            init_base_range=tuple(env_config.get("init_joints", {}).get("base_range", [-0.1, 0.1])),
+            init_shoulder_range=tuple(env_config.get("init_joints", {}).get("shoulder_range", [-0.3, 0.3])),
+            init_elbow_range=tuple(env_config.get("init_joints", {}).get("elbow_range", [-0.3, 0.3])),
+            init_wrist_range=tuple(env_config.get("init_joints", {}).get("wrist_range", [-0.3, 0.3])),
+            reach_radius=env_config.get("reach", {}).get("reach_radius", 0.05),
+            dwell_steps=env_config.get("reach", {}).get("dwell_steps", 5),
+            ee_vel_threshold=env_config.get("reach", {}).get("ee_vel_threshold", 0.1),
+            attach_radius=env_config.get("magnet", {}).get("attach_radius", 0.04),
+            attach_vel_threshold=env_config.get("magnet", {}).get("attach_vel_threshold", 0.15),
+            lift_height=env_config.get("lift", {}).get("lift_height", 0.1),
+            hold_steps=env_config.get("lift", {}).get("hold_steps", 10),
+            reward_config=reward_config,
+        )
+        screen_env.create_controller_from_config(control_config)
+        screen_env.guide_alpha = guide_alpha
+
+        attempts = 0
+        max_attempts = 500
+        while len(winning_seeds) < num_episodes and attempts < max_attempts:
+            success, seed = preview_episode(screen_env, policy_fn)
+            attempts += 1
+            if success:
+                winning_seeds.append(seed)
+                print(f"  Found success {len(winning_seeds)}/{num_episodes} (seed={seed}, attempt {attempts})")
+
+        screen_env.close()
+
+        if not winning_seeds:
+            print(f"  No successes found in {max_attempts} attempts. Showing regular episodes.")
+        else:
+            print(f"  Found {len(winning_seeds)} successful episodes in {attempts} attempts")
+
+    # Create rendering environment
+    env = create_env_with_viewer(config)
+    env.guide_alpha = guide_alpha
+    print("Created environment with viewer")
+
     # Run episodes
-    print(f"\nRunning {num_episodes} episodes...")
+    num_to_show = len(winning_seeds) if winning_seeds else num_episodes
+    print(f"\nRunning {num_to_show} episodes{'  (success-only mode)' if winning_seeds else ''}...")
     print("Press Ctrl+C to stop early\n")
 
     results = []
     try:
-        for i in range(num_episodes):
-            print(f"\n--- Episode {i+1}/{num_episodes} ---")
-            result = run_episode(env, policy_fn, render_delay=render_delay)
+        for i in range(num_to_show):
+            print(f"\n--- Episode {i+1}/{num_to_show} ---")
+            if winning_seeds:
+                # Replay with the known-good seed
+                obs, info = env.reset(seed=winning_seeds[i])
+                env.render()
+                episode_return = 0.0
+                episode_length = 0
+                done = False
+                while not done:
+                    action = policy_fn(obs)
+                    obs, reward, terminated, truncated, info = env.step(action)
+                    done = terminated or truncated
+                    episode_return += reward
+                    episode_length += 1
+                    env.render()
+                    if render_delay > 0:
+                        time.sleep(render_delay)
+                result = {
+                    "episode_return": episode_return,
+                    "episode_length": episode_length,
+                    "is_success": info.get("is_success", False),
+                }
+                success_str = "SUCCESS!" if result["is_success"] else "Failed"
+                print(f"\n{success_str}  Return: {episode_return:.2f}  Length: {episode_length}")
+            else:
+                result = run_episode(env, policy_fn, render_delay=render_delay)
             results.append(result)
-
-            # Brief pause between episodes
             time.sleep(0.5)
 
     except KeyboardInterrupt:
@@ -237,6 +338,7 @@ def visualize_random_policy(
     config_path: str = None,
     num_episodes: int = 3,
     render_delay: float = 0.02,
+    guide_alpha: float = 0.0,
 ):
     """
     Visualize random policy (for testing environment).
@@ -254,6 +356,9 @@ def visualize_random_policy(
     print(f"Task mode: {config['env']['task_mode']}")
 
     env = create_env_with_viewer(config)
+    env.guide_alpha = guide_alpha
+    if guide_alpha > 0:
+        print(f"Guide alpha: {guide_alpha}")
     print("Created environment with viewer")
 
     def random_policy(obs):
@@ -284,6 +389,8 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cpu", help="Device")
     parser.add_argument("--delay", type=float, default=0.02, help="Render delay (seconds)")
     parser.add_argument("--random", action="store_true", help="Use random policy")
+    parser.add_argument("--success-only", action="store_true", help="Only show successful episodes")
+    parser.add_argument("--guide-alpha", type=float, default=0.0, help="Jacobian-transpose guide strength (0=off)")
     args = parser.parse_args()
 
     if args.random:
@@ -291,6 +398,7 @@ if __name__ == "__main__":
             config_path=args.config,
             num_episodes=args.episodes,
             render_delay=args.delay,
+            guide_alpha=args.guide_alpha,
         )
     elif args.checkpoint:
         visualize_trained_policy(
@@ -299,6 +407,8 @@ if __name__ == "__main__":
             num_episodes=args.episodes,
             device=args.device,
             render_delay=args.delay,
+            success_only=args.success_only,
+            guide_alpha=args.guide_alpha,
         )
     else:
         print("Error: Must specify --checkpoint or --random")

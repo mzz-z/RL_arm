@@ -39,6 +39,7 @@ class PPO:
         entropy_coef: float = 0.01,
         value_coef: float = 0.5,
         max_grad_norm: float = 0.5,
+        target_kl: Optional[float] = 0.02,
         # Update parameters
         epochs_per_update: int = 10,
         minibatch_size: int = 64,
@@ -60,6 +61,7 @@ class PPO:
             entropy_coef: Entropy bonus coefficient
             value_coef: Value loss coefficient
             max_grad_norm: Maximum gradient norm for clipping
+            target_kl: If set, stop epoch early when approx KL exceeds this
             epochs_per_update: Number of epochs per PPO update
             minibatch_size: Minibatch size for updates
             device: Device for tensors
@@ -77,6 +79,7 @@ class PPO:
         self.entropy_coef = entropy_coef
         self.value_coef = value_coef
         self.max_grad_norm = max_grad_norm
+        self.target_kl = target_kl
 
         # Update parameters
         self.epochs_per_update = epochs_per_update
@@ -202,19 +205,16 @@ class PPO:
         all_clip_fracs = []
 
         # Multiple epochs over the rollout data
+        kl_exceeded = False
         for epoch in range(self.epochs_per_update):
+            if kl_exceeded:
+                break
+
             # Iterate over minibatches
             for batch in self.buffer.get_minibatches(self.minibatch_size, shuffle=True):
-                # CRITICAL FIX: Normalize observations before passing to policy
-                # The buffer stores raw observations, but old_log_probs were computed
-                # with normalized observations during rollout. We must normalize here
-                # to ensure new_log_probs are computed under the same input distribution.
+                # Buffer stores pre-normalized observations (normalized during rollout
+                # with the same stats used for old_log_probs), so no re-normalization needed.
                 obs = batch["obs"]
-                if self.obs_normalizer is not None:
-                    # Normalize on CPU then move to device
-                    obs_np = obs.cpu().numpy()
-                    obs_normalized = self.obs_normalizer.normalize(obs_np)
-                    obs = torch.FloatTensor(obs_normalized).to(self.device)
 
                 # Get current policy outputs
                 new_log_probs, entropy, values = self.policy.evaluate(
@@ -263,6 +263,11 @@ class PPO:
                 all_entropy_losses.append(-entropy_loss.item())  # Report positive entropy
                 all_approx_kl.append(approx_kl)
                 all_clip_fracs.append(clip_frac)
+
+                # Early stopping: if KL diverges too much, stop updating
+                if self.target_kl is not None and approx_kl > self.target_kl:
+                    kl_exceeded = True
+                    break
 
         # Compute explained variance
         with torch.no_grad():
@@ -406,6 +411,7 @@ def create_ppo(
         entropy_coef=ppo_config.get("entropy_coef", 0.01),
         value_coef=ppo_config.get("value_coef", 0.5),
         max_grad_norm=ppo_config.get("max_grad_norm", 0.5),
+        target_kl=ppo_config.get("target_kl", 0.02),
         epochs_per_update=ppo_config.get("epochs_per_update", 10),
         minibatch_size=ppo_config.get("minibatch_size", 64),
         device=device,

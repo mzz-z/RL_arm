@@ -5,47 +5,76 @@ env:
   task_mode: "grasp"
   max_episode_steps: 300      # More time for grasp + lift
 
-  # Slightly easier attachment for transfer learning
+  # Initial joint state (same as reach training)
+  init_joints:
+    base_range: [-0.1, 0.1]
+    shoulder_range: [0.2, 0.5]
+    elbow_range: [-0.6, -0.1]
+    wrist_range: [-0.3, 0.3]
+    vel_noise_std: 0.01
+
+  # Relaxed attachment for transfer learning
   magnet:
-    attach_radius: 0.045      # Slightly larger than default (0.04)
-    attach_vel_threshold: 0.18  # Slightly more forgiving (0.15 default)
+    attach_radius: 0.06        # Generous for demo (default 0.04)
+    attach_vel_threshold: 999.0  # Effectively disabled — velocity gate blocks learning
+
+  # Relaxed lift/hold for demo
+  lift:
+    lift_height: 0.08          # Slightly lower than default (0.1)
+    hold_steps: 5              # Shorter hold than default (10)
 
 reward:
   grasp:
     w_dist: 1.0
-    attach_bonus: 2.0
-    w_lift: 1.0
-    w_hold_per_step: 0.1
+    attach_bonus: 5.0          # Bigger bonus to incentivize attachment
+    w_lift: 2.0                # Stronger lift signal
+    w_hold_per_step: 0.2       # More reward for holding
     success_bonus: 15.0
+  # Action penalties (same as reach)
+  w_action_mag: 0.01
+  w_action_change: 0.005
 
 ppo:
-  # Lower entropy to preserve reach behavior during transfer learning
-  entropy_coef: 0.005
-  # Slower LR decay for harder task
+  entropy_coef: 0.003          # Lower entropy to preserve reach behavior
+  lr: 1.0e-4                   # Lower LR for fine-tuning from reach
   lr_schedule: "cosine"
   lr_min: 1.0e-5
+  num_envs: 8
+  rollout_steps: 2048
 
 # Curriculum for grasp (progressive difficulty)
 curriculum:
   enabled: true
   metric: "success_rate"
-  patience: 3
+  patience: 2
 
   stages:
-    # Stage 1: Easy (close targets)
-    - threshold: 0.4
+    # Stage 1: Very easy — balls very close, same region as reach Stage 1
+    - threshold: 0.2
       spawn:
         radius_min: 0.20
-        radius_max: 0.28
+        radius_max: 0.35
+        angle_min: 0.2
+        angle_max: 0.7
+        azimuth_min: 0.0
+        azimuth_max: 0.0
 
-    # Stage 2: Medium
+    # Stage 2: Wider range
+    - threshold: 0.4
+      spawn:
+        radius_min: 0.18
+        radius_max: 0.40
+        angle_min: 0.1
+        angle_max: 0.8
+        azimuth_min: -0.5
+        azimuth_max: 0.5
+
+    # Stage 3: Full difficulty
     - threshold: 0.6
       spawn:
         radius_min: 0.15
-        radius_max: 0.35
-
-    # Stage 3: Full difficulty
-    - threshold: 0.8
-      spawn:
-        radius_min: 0.12
-        radius_max: 0.42
+        radius_max: 0.45
+        angle_min: 0.0
+        angle_max: 0.9
+        azimuth_min: -1.5
+        azimuth_max: 1.5

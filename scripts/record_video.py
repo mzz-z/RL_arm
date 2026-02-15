@@ -23,9 +23,10 @@ def load_policy(checkpoint_path: str, config: dict, device: str = "cpu"):
     from rl.networks import create_actor_critic
     from rl.buffer import create_buffer
     from rl.ppo import create_ppo
+    from env.observations import ObservationBuilder
 
-    obs_dim = 14
-    action_dim = 2
+    obs_dim = ObservationBuilder.OBS_DIM
+    action_dim = 4
 
     policy = create_actor_critic(config.get("model", {}), obs_dim, action_dim)
     buffer = create_buffer(config.get("ppo", {}), obs_dim, action_dim, device)

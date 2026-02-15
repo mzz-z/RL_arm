@@ -178,6 +178,11 @@ def update_env_curriculum(vec_env, stage_config: Dict[str, Any]) -> None:
                     azimuth_range=azimuth_range,
                 )
 
+            # Update task parameters (e.g. reach_radius curriculum)
+            reach_radius = stage_config.get("reach_radius")
+            if reach_radius is not None and hasattr(unwrapped, "set_task_params"):
+                unwrapped.set_task_params(reach_radius=reach_radius)
+
 
 def create_curriculum(config: dict) -> Optional[CurriculumManager]:
     """

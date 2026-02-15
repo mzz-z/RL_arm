@@ -14,7 +14,8 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Train grasp task")
-    parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume from")
+    parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume from (full state)")
+    parser.add_argument("--transfer", type=str, default=None, help="Checkpoint for transfer learning (weights only)")
     parser.add_argument("--verbose", action="store_true", help="Print episode completions")
     args = parser.parse_args()
 
@@ -23,5 +24,6 @@ if __name__ == "__main__":
     train(
         config_path=str(config_path),
         resume_from=args.resume,
+        transfer_from=args.transfer,
         verbose_episodes=args.verbose,
     )

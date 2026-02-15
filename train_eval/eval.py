@@ -39,11 +39,13 @@ def make_eval_env(config: dict) -> MujocoArmEnv:
         init_base_range=tuple(env_config.get("init_joints", {}).get("base_range", [-0.1, 0.1])),
         init_shoulder_range=tuple(env_config.get("init_joints", {}).get("shoulder_range", [-0.3, 0.3])),
         init_elbow_range=tuple(env_config.get("init_joints", {}).get("elbow_range", [-0.3, 0.3])),
+        init_wrist_range=tuple(env_config.get("init_joints", {}).get("wrist_range", [-0.3, 0.3])),
         init_vel_noise_std=env_config.get("init_joints", {}).get("vel_noise_std", 0.01),
         # Task parameters
         reach_radius=env_config.get("reach", {}).get("reach_radius", 0.05),
         dwell_steps=env_config.get("reach", {}).get("dwell_steps", 5),
         ee_vel_threshold=env_config.get("reach", {}).get("ee_vel_threshold", 0.1),
+        w_delta_dist=env_config.get("reach", {}).get("w_delta_dist", 5.0),
         attach_radius=env_config.get("magnet", {}).get("attach_radius", 0.04),
         attach_vel_threshold=env_config.get("magnet", {}).get("attach_vel_threshold", 0.15),
         lift_height=env_config.get("lift", {}).get("lift_height", 0.1),
@@ -67,9 +69,13 @@ def evaluate(
     num_episodes: int = 20,
     seeds: Optional[List[int]] = None,
     verbose: bool = False,
+    spawn_params: Optional[Dict[str, Any]] = None,
+    deterministic: bool = True,
+    guide_alpha: Optional[float] = None,
+    reach_radius: Optional[float] = None,
 ) -> Dict[str, float]:
     """
-    Run deterministic evaluation episodes.
+    Run evaluation episodes.
 
     Args:
         ppo: Trained PPO agent
@@ -77,6 +83,9 @@ def evaluate(
         num_episodes: Number of evaluation episodes
         seeds: Fixed seeds for reproducibility (cycles if fewer than num_episodes)
         verbose: Whether to print per-episode info
+        spawn_params: Optional spawn parameter overrides (e.g. from curriculum stage).
+                      If provided, overrides the config's default spawn distribution.
+        deterministic: If True, use mean actions. If False, sample stochastically.
 
     Returns:
         Dictionary of aggregated metrics
@@ -87,6 +96,37 @@ def evaluate(
 
     # Create fresh environment for evaluation
     eval_env = make_eval_env(config)
+
+    # Apply guide_alpha if provided, otherwise use config default
+    if guide_alpha is not None:
+        eval_env.guide_alpha = guide_alpha
+    else:
+        guide_cfg = config.get("env", {}).get("guide", {})
+        if guide_cfg.get("enabled", False):
+            eval_env.guide_alpha = guide_cfg.get("alpha_initial", 0.0)
+
+    # Apply curriculum spawn params if provided
+    if spawn_params:
+        radius_min = spawn_params.get("radius_min")
+        radius_max = spawn_params.get("radius_max")
+        angle_min = spawn_params.get("angle_min")
+        angle_max = spawn_params.get("angle_max")
+        azimuth_min = spawn_params.get("azimuth_min")
+        azimuth_max = spawn_params.get("azimuth_max")
+
+        radius_range = (radius_min, radius_max) if radius_min is not None else None
+        angle_range = (angle_min, angle_max) if angle_min is not None else None
+        azimuth_range = (azimuth_min, azimuth_max) if azimuth_min is not None else None
+
+        eval_env.set_spawn_params(
+            radius_range=radius_range,
+            angle_range=angle_range,
+            azimuth_range=azimuth_range,
+        )
+
+    # Apply curriculum reach_radius if provided
+    if reach_radius is not None:
+        eval_env.set_task_params(reach_radius=reach_radius)
 
     # Tracking
     all_returns = []
@@ -108,8 +148,7 @@ def evaluate(
         done = False
 
         while not done:
-            # Deterministic action (mean of policy)
-            action, _, _, _ = ppo.get_action(obs, deterministic=True)
+            action, _, _, _ = ppo.get_action(obs, deterministic=deterministic)
 
             obs, reward, terminated, truncated, info = eval_env.step(action)
             done = terminated or truncated
@@ -193,7 +232,7 @@ def evaluate_checkpoint(
     # Get dimensions
     from env.observations import ObservationBuilder
     obs_dim = ObservationBuilder.OBS_DIM
-    action_dim = 3
+    action_dim = 4
 
     # Create policy
     policy = create_actor_critic(config.get("model", {}), obs_dim, action_dim)

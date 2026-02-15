@@ -1,4 +1,4 @@
-"""Main MuJoCo environment for the 3-DOF arm RL task."""
+"""Main MuJoCo environment for the 4-DOF arm RL task."""
 
 import numpy as np
 import mujoco
@@ -16,12 +16,13 @@ from env.task_grasp import GraspTask, create_grasp_task
 
 class MujocoArmEnv(gym.Env):
     """
-    Gymnasium environment for 3-DOF arm reach/grasp task.
+    Gymnasium environment for 4-DOF arm reach/grasp task.
 
     The arm has:
     - Base joint: rotates around z-axis (turret)
     - Shoulder joint: rotates around y-axis
     - Elbow joint: rotates around y-axis
+    - Wrist joint: pitch around y-axis
 
     Supports two task modes:
     - "reach": Move end-effector to ball position
@@ -49,6 +50,7 @@ class MujocoArmEnv(gym.Env):
         init_base_range: tuple = (-0.1, 0.1),
         init_shoulder_range: tuple = (-0.3, 0.3),
         init_elbow_range: tuple = (-0.3, 0.3),
+        init_wrist_range: tuple = (-0.3, 0.3),
         init_vel_noise_std: float = 0.01,
         # Task-specific parameters
         reach_radius: float = 0.05,
@@ -64,6 +66,8 @@ class MujocoArmEnv(gym.Env):
         # Termination parameters
         ball_fell_threshold: float = -0.05,
         unreachable_margin: float = 0.1,
+        # Guided action (Jacobian-transpose assist)
+        guide_alpha: float = 0.0,
     ):
         """
         Initialize the arm environment.
@@ -80,6 +84,7 @@ class MujocoArmEnv(gym.Env):
             init_base_range: Initial base angle range
             init_shoulder_range: Initial shoulder angle range
             init_elbow_range: Initial elbow angle range
+            init_wrist_range: Initial wrist angle range
             init_vel_noise_std: Initial velocity noise
             reach_radius: Success distance for reach task
             dwell_steps: Steps to dwell for reach success
@@ -112,11 +117,15 @@ class MujocoArmEnv(gym.Env):
         self.init_base_range = init_base_range
         self.init_shoulder_range = init_shoulder_range
         self.init_elbow_range = init_elbow_range
+        self.init_wrist_range = init_wrist_range
         self.init_vel_noise_std = init_vel_noise_std
 
         # Termination parameters
         self.ball_fell_threshold = ball_fell_threshold
         self.unreachable_margin = unreachable_margin
+
+        # Guided action (Jacobian-transpose assist)
+        self.guide_alpha = guide_alpha
 
         # Load MuJoCo model
         if model_path is None:
@@ -127,6 +136,14 @@ class MujocoArmEnv(gym.Env):
         # Validate model and get IDs
         self.ids = validate_model(self.model, self.data)
         self.geometry = get_arm_geometry(self.model)
+
+        # For reach task: disable ball collision so it's a phantom target
+        # Without this, the arm pushes the ball away on contact, making reach impossible
+        if task_mode == "reach":
+            ball_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "ball_geom")
+            if ball_geom_id >= 0:
+                self.model.geom_contype[ball_geom_id] = 0
+                self.model.geom_conaffinity[ball_geom_id] = 0
 
         # Store useful constants
         self.max_reach = self.geometry["max_reach"]
@@ -144,7 +161,7 @@ class MujocoArmEnv(gym.Env):
         if reward_config is None:
             reward_config = {}
         reward_config["max_reach"] = self.max_reach
-        self.reward_computer = create_reward_computer(reward_config)
+        self.reward_computer = create_reward_computer(reward_config, task_mode=task_mode)
 
         # Create task (reach or grasp)
         if task_mode == "reach":
@@ -175,7 +192,7 @@ class MujocoArmEnv(gym.Env):
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(3,),
+            shape=(4,),
             dtype=np.float32,
         )
 
@@ -229,6 +246,28 @@ class MujocoArmEnv(gym.Env):
         self.set_controller(controller)
         return controller
 
+    def set_guide_alpha(self, alpha: float):
+        """Set the guide action blending strength."""
+        self.guide_alpha = alpha
+
+    def _compute_guide_action(self) -> np.ndarray:
+        """Compute analytical action toward ball using Jacobian transpose."""
+        ee_pos = self.data.site_xpos[self.ids["ee_site"]]
+        ball_pos = self.data.xpos[self.ids["ball_body"]]
+        error = ball_pos - ee_pos
+
+        jacp = np.zeros((3, self.model.nv))
+        jacr = np.zeros((3, self.model.nv))
+        mujoco.mj_jacSite(self.model, self.data, jacp, jacr, self.ids["ee_site"])
+
+        # First 4 columns = arm joint DOFs
+        J_arm = jacp[:, :4]
+        guide = J_arm.T @ error  # 4D joint-space action
+
+        # Clip to [-1, 1] range (preserves each joint's natural signal)
+        guide = np.clip(guide, -1.0, 1.0)
+        return guide.astype(np.float32)
+
     def reset(
         self,
         *,
@@ -254,10 +293,12 @@ class MujocoArmEnv(gym.Env):
         base_init = self.np_random.uniform(*self.init_base_range)
         shoulder_init = self.np_random.uniform(*self.init_shoulder_range)
         elbow_init = self.np_random.uniform(*self.init_elbow_range)
+        wrist_init = self.np_random.uniform(*self.init_wrist_range)
 
         self.data.qpos[self.ids["base_qpos_addr"]] = base_init
         self.data.qpos[self.ids["shoulder_qpos_addr"]] = shoulder_init
         self.data.qpos[self.ids["elbow_qpos_addr"]] = elbow_init
+        self.data.qpos[self.ids["wrist_qpos_addr"]] = wrist_init
 
         # Add small velocity noise
         self.data.qvel[self.ids["base_qvel_addr"]] = self.np_random.normal(
@@ -269,10 +310,14 @@ class MujocoArmEnv(gym.Env):
         self.data.qvel[self.ids["elbow_qvel_addr"]] = self.np_random.normal(
             0, self.init_vel_noise_std
         )
+        self.data.qvel[self.ids["wrist_qvel_addr"]] = self.np_random.normal(
+            0, self.init_vel_noise_std
+        )
 
         # Spawn ball in reachable region
         ball_pos = self._sample_ball_position()
         self._set_ball_position(ball_pos)
+        self._ball_spawn_pos = ball_pos.copy()  # Store for pinning in reach mode
 
         # Reset task state (grasp task needs data for weld constraint)
         if self.task_mode == "grasp":
@@ -287,7 +332,7 @@ class MujocoArmEnv(gym.Env):
 
         # Reset controller if available
         if self.controller is not None:
-            self.controller.reset(np.array([base_init, shoulder_init, elbow_init]))
+            self.controller.reset(np.array([base_init, shoulder_init, elbow_init, wrist_init]))
 
         # Forward to update state
         mujoco.mj_forward(self.model, self.data)
@@ -307,23 +352,39 @@ class MujocoArmEnv(gym.Env):
         Take one step in the environment.
 
         Args:
-            action: Action array (3,) in [-1, 1]
+            action: Action array (4,) in [-1, 1]
 
         Returns:
             (observation, reward, terminated, truncated, info)
         """
         action = np.asarray(action, dtype=np.float32)
 
+        # Blend with Jacobian-transpose guide if active
+        if self.guide_alpha > 0:
+            guide_action = self._compute_guide_action()
+            action = action + self.guide_alpha * guide_action
+            action = np.clip(action, -1.0, 1.0)
+
         # Apply action via controller
         if self.controller is not None:
             self.controller.apply_action(action, self.data)
         else:
             # Fallback: direct control (not recommended)
-            self.data.ctrl[:3] = action * 2.0  # Scale to approximate joint range
+            self.data.ctrl[:4] = action * 2.0  # Scale to approximate joint range
 
         # Step simulation
         for _ in range(self.frame_skip):
             mujoco.mj_step(self.model, self.data)
+
+        # Reach mode: pin ball at spawn position (phantom target)
+        # Ball collision is disabled so it falls through the table without this
+        if self.task_mode == "reach":
+            addr = self.ids["ball_qpos_addr"]
+            self.data.qpos[addr:addr + 3] = self._ball_spawn_pos
+            self.data.qpos[addr + 3:addr + 7] = [1, 0, 0, 0]
+            vel_addr = self.ids["ball_qvel_addr"]
+            self.data.qvel[vel_addr:vel_addr + 6] = 0
+            mujoco.mj_forward(self.model, self.data)
 
         self.step_count += 1
 
@@ -340,6 +401,7 @@ class MujocoArmEnv(gym.Env):
             self.data.qvel[self.ids["base_qvel_addr"]],
             self.data.qvel[self.ids["shoulder_qvel_addr"]],
             self.data.qvel[self.ids["elbow_qvel_addr"]],
+            self.data.qvel[self.ids["wrist_qvel_addr"]],
         ])
 
         # Compute reward and check success
@@ -360,6 +422,16 @@ class MujocoArmEnv(gym.Env):
                 prev_action=self.prev_action,
                 joint_vel=joint_vel,
             )
+
+            # Fix ball teleport: snap ball to EE when weld just activated
+            # so the constraint is already satisfied before the next physics step
+            if self.task.just_attached:
+                addr = self.ids["ball_qpos_addr"]
+                ee_pos_snap = self.data.site_xpos[self.ids["ee_site"]].copy()
+                self.data.qpos[addr:addr + 3] = ee_pos_snap
+                vel_addr = self.ids["ball_qvel_addr"]
+                self.data.qvel[vel_addr:vel_addr + 6] = 0
+                mujoco.mj_forward(self.model, self.data)
 
         self._episode_return += reward
         self.prev_action = action.copy()
@@ -504,6 +576,11 @@ class MujocoArmEnv(gym.Env):
         if self.renderer is not None:
             self.renderer.close()
             self.renderer = None
+
+    def set_task_params(self, reach_radius: float = None):
+        """Update task parameters (for curriculum learning)."""
+        if reach_radius is not None and self.task_mode == "reach":
+            self.task.config.reach_radius = reach_radius
 
     def set_spawn_params(
         self,
