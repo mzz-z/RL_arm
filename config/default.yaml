@@ -77,10 +77,10 @@ env:
     attach_radius: 0.04       # Distance to trigger attachment
     attach_vel_threshold: 0.15  # Max ee velocity to attach
 
-  # Lift/hold parameters (Phase 2)
-  lift:
-    lift_height: 0.1          # Height above table for success
-    hold_steps: 10            # Steps at height to succeed
+  # Place parameters (Phase 2)
+  place:
+    place_radius: 0.05        # Distance to destination for success
+    hold_steps: 10            # Steps at destination to succeed
 
   # Termination conditions
   termination:
@@ -125,13 +125,16 @@ reward:
     proximity_alpha: 5.0      # Steepness: higher = tighter focus on target
     success_bonus: 10.0       # Bonus for completing reach task
 
-  # Phase 2: Grasp/Lift
+  # Phase 2: Grasp & Place
   grasp:
     w_dist: 1.0               # Pre-attach distance weight
     attach_bonus: 2.0         # One-time bonus for attachment
-    w_lift: 1.0               # Weight on (normalized) lift height
-    w_hold_per_step: 0.1      # Bonus per step at lift height
-    success_bonus: 15.0       # Bonus for completing lift/hold
+    w_place_dist: 1.0         # Post-attach distance to destination weight
+    w_place_proximity: 0.5    # Exponential proximity bonus for destination
+    place_proximity_alpha: 5.0  # Steepness of place proximity curve
+    place_bonus: 5.0          # One-time bonus for reaching destination
+    w_hold_per_step: 0.1      # Bonus per step at destination
+    success_bonus: 15.0       # Bonus for completing pick-and-place
 
 ppo:
   # Learning rate with scheduling

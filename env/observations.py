@@ -12,7 +12,7 @@ class ObservationBuilder:
     """
     Builds the observation vector from MuJoCo state.
 
-    Observation vector (21 dimensions):
+    Observation vector (24 dimensions):
         - joint angles (4): base, shoulder, elbow, wrist (normalized by joint limits)
         - joint velocities (4): base_vel, shoulder_vel, elbow_vel, wrist_vel (scaled)
         - end-effector position (3): x, y, z (world frame)
@@ -20,9 +20,11 @@ class ObservationBuilder:
         - ball position (3): x, y, z (world frame)
         - relative position (3): ball - ee (direction to target)
         - grasp flag (1): 0 or 1
+        - destination position (3): x, y, z (place target; zeros for reach mode)
     """
 
-    OBS_DIM = 21
+    OBS_DIM = 24
+    GRASP_FLAG_IDX = 20
 
     def __init__(
         self,
@@ -60,6 +62,7 @@ class ObservationBuilder:
         self,
         data: mujoco.MjData,
         attached: bool,
+        destination_pos: np.ndarray = None,
     ) -> np.ndarray:
         """
         Build observation vector from current state.
@@ -67,9 +70,10 @@ class ObservationBuilder:
         Args:
             data: MuJoCo data object
             attached: Whether ball is attached (grasp flag)
+            destination_pos: Place target position (3,) or None for reach mode
 
         Returns:
-            21-dim observation vector
+            24-dim observation vector
         """
         obs = np.zeros(self.OBS_DIM, dtype=np.float32)
 
@@ -111,7 +115,11 @@ class ObservationBuilder:
         obs[17:20] = ball_pos - ee_pos
 
         # Grasp flag
-        obs[20] = float(attached)
+        obs[self.GRASP_FLAG_IDX] = float(attached)
+
+        # Destination position (place target; zeros for reach mode)
+        if destination_pos is not None:
+            obs[21:24] = destination_pos
 
         return obs
 

@@ -1,4 +1,4 @@
-"""Reward computation for the 2-DOF arm environment."""
+"""Reward computation for the 4-DOF arm environment."""
 
 import numpy as np
 from dataclasses import dataclass
@@ -24,11 +24,17 @@ class RewardConfig:
     proximity_alpha: float = 5.0  # Steepness of proximity curve
     reach_success_bonus: float = 10.0  # Bonus for completing reach
 
-    # Phase 2: Grasp rewards
+    # Phase 2: Grasp rewards (approach + attach)
     attach_bonus: float = 2.0  # One-time bonus for attachment
     w_lift: float = 1.0  # Weight on lift height
-    w_hold_per_step: float = 0.1  # Bonus per step at lift height
-    grasp_success_bonus: float = 15.0  # Bonus for completing grasp task
+
+    # Phase 2: Place rewards (transport + place)
+    w_place_dist: float = 1.0  # Weight on distance to destination (after attach)
+    w_place_proximity: float = 0.5  # Proximity bonus for destination
+    place_proximity_alpha: float = 5.0  # Steepness of place proximity curve
+    place_bonus: float = 5.0  # One-time bonus for placing
+    w_hold_per_step: float = 0.1  # Bonus per step at destination
+    grasp_success_bonus: float = 15.0  # Bonus for completing pick-and-place
 
 
 class RewardComputer:
@@ -113,41 +119,42 @@ class RewardComputer:
     def compute_grasp_reward(
         self,
         dist: float,
-        lift_height: float,
+        dist_to_dest: float,
         action: np.ndarray,
         prev_action: Optional[np.ndarray],
         joint_vel: np.ndarray,
         attached: bool,
         just_attached: bool,
-        at_lift_height: bool,
+        just_placed: bool,
+        at_destination: bool,
         is_success: bool,
-        table_height: float,
     ) -> tuple[float, dict]:
         """
-        Compute reward for grasp task (Phase 2).
+        Compute reward for grasp-and-place task (Phase 2).
 
-        Uses gating to prevent reward hacking:
-        - Before attach: distance reward
-        - After attach: lift/hold rewards (no distance)
+        Uses gating to shape behavior through task phases:
+        - Before attach: distance to ball (approach shaping)
+        - After attach: distance to destination (transport shaping)
+        - At destination: hold bonus + place bonus
 
         Args:
             dist: Distance from ee to ball
-            lift_height: Ball z - table z
-            action: Current action (2,)
+            dist_to_dest: Distance from ball to destination
+            action: Current action (4,)
             prev_action: Previous action or None
-            joint_vel: Joint velocities (2,)
+            joint_vel: Joint velocities (4,)
             attached: Whether ball is currently attached
             just_attached: Whether attachment just happened this step
-            at_lift_height: Whether ball is at target lift height
-            is_success: Whether grasp task succeeded (held at height)
-            table_height: Table z position
+            just_placed: Whether placement just happened this step
+            at_destination: Whether ball is within place radius
+            is_success: Whether task succeeded (held at dest)
 
         Returns:
             (total_reward, reward_terms_dict)
         """
         terms = {}
 
-        # Distance shaping (only when not attached)
+        # Phase 1: Approach - distance to ball (only when not attached)
         if not attached:
             if self.config.normalize_distance:
                 r_dist = -dist / self.config.max_reach
@@ -163,16 +170,33 @@ class RewardComputer:
         else:
             terms["attach"] = 0.0
 
-        # Lift shaping (only when attached)
-        if attached and lift_height > 0:
-            # Normalize lift by max reach
-            r_lift = lift_height / self.config.max_reach
-            terms["lift"] = self.config.w_lift * r_lift
-        else:
-            terms["lift"] = 0.0
+        # Phase 2: Transport - distance to destination (only when attached)
+        if attached:
+            if self.config.normalize_distance:
+                r_place_dist = -dist_to_dest / self.config.max_reach
+            else:
+                r_place_dist = -dist_to_dest
+            terms["place_dist"] = self.config.w_place_dist * r_place_dist
 
-        # Hold bonus (per step at lift height)
-        if attached and at_lift_height:
+            # Proximity bonus for destination
+            if self.config.w_place_proximity > 0:
+                norm_d = dist_to_dest / self.config.max_reach
+                r_prox = np.exp(-self.config.place_proximity_alpha * norm_d)
+                terms["place_proximity"] = self.config.w_place_proximity * r_prox
+            else:
+                terms["place_proximity"] = 0.0
+        else:
+            terms["place_dist"] = 0.0
+            terms["place_proximity"] = 0.0
+
+        # Placement bonus (one-time)
+        if just_placed:
+            terms["place"] = self.config.place_bonus
+        else:
+            terms["place"] = 0.0
+
+        # Hold bonus (per step at destination while attached)
+        if attached and at_destination:
             terms["hold"] = self.config.w_hold_per_step
         else:
             terms["hold"] = 0.0
@@ -237,6 +261,10 @@ def create_reward_computer(config: dict, task_mode: str = "reach") -> RewardComp
         reach_success_bonus=reach_config.get("success_bonus", 10.0),
         attach_bonus=grasp_config.get("attach_bonus", 2.0),
         w_lift=grasp_config.get("w_lift", 1.0),
+        w_place_dist=grasp_config.get("w_place_dist", 1.0),
+        w_place_proximity=grasp_config.get("w_place_proximity", 0.5),
+        place_proximity_alpha=grasp_config.get("place_proximity_alpha", 5.0),
+        place_bonus=grasp_config.get("place_bonus", 5.0),
         w_hold_per_step=grasp_config.get("w_hold_per_step", 0.1),
         grasp_success_bonus=grasp_config.get("success_bonus", 15.0),
     )

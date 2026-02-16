@@ -108,8 +108,8 @@ def _create_single_env(
         w_delta_dist=env_config.get("reach", {}).get("w_delta_dist", 5.0),
         attach_radius=env_config.get("magnet", {}).get("attach_radius", 0.04),
         attach_vel_threshold=env_config.get("magnet", {}).get("attach_vel_threshold", 0.15),
-        lift_height=env_config.get("lift", {}).get("lift_height", 0.1),
-        hold_steps=env_config.get("lift", {}).get("hold_steps", 10),
+        place_radius=env_config.get("place", {}).get("place_radius", 0.05),
+        hold_steps=env_config.get("place", {}).get("hold_steps", 10),
         # Reward config
         reward_config=reward_config,
         # Termination
@@ -416,8 +416,8 @@ def collect_rollout(
                 # Phase 2 metrics
                 if "ever_attached" in info:
                     stats.recent_attach_rate.append(float(info.get("ever_attached", False)))
-                if "lift_success" in info:
-                    stats.recent_lift_success.append(float(info.get("lift_success", False)))
+                if "place_success" in info:
+                    stats.recent_place_success.append(float(info.get("place_success", False)))
                 if "dropped" in info:
                     stats.recent_drop_rate.append(float(info.get("dropped", False)))
 
@@ -560,7 +560,7 @@ def train(
         # would normalize to ~10000 (clipped to 10.0), injecting a huge
         # random signal since the policy never learned this dimension.
         if ppo.obs_normalizer is not None:
-            grasp_flag_idx = ObservationBuilder.OBS_DIM - 1  # dim 20
+            grasp_flag_idx = ObservationBuilder.GRASP_FLAG_IDX  # dim 20
             ppo.obs_normalizer.var[grasp_flag_idx] = 1.0
             ppo.obs_normalizer.mean[grasp_flag_idx] = 0.0
             print(f"  Reset normalizer stats for grasp flag (dim {grasp_flag_idx})")
@@ -668,8 +668,8 @@ def train(
                 print(f"    Curriculum Return:  {curriculum_eval['avg_return']:.2f}")
                 if "attach_rate" in curriculum_eval:
                     print(f"    Attach Rate:        {curriculum_eval['attach_rate']*100:.1f}%")
-                if "lift_success_rate" in curriculum_eval:
-                    print(f"    Lift Rate:          {curriculum_eval['lift_success_rate']*100:.1f}%")
+                if "place_success_rate" in curriculum_eval:
+                    print(f"    Place Rate:         {curriculum_eval['place_success_rate']*100:.1f}%")
                 logger.log("eval_curriculum/success_rate", curriculum_eval["success_rate"], stats.global_step)
                 logger.log("eval_curriculum/avg_return", curriculum_eval["avg_return"], stats.global_step)
 
@@ -709,8 +709,8 @@ def train(
             print(f"    Full Return:  {eval_metrics['avg_return']:.2f}")
             if "attach_rate" in eval_metrics:
                 print(f"    Attach Rate:  {eval_metrics['attach_rate']*100:.1f}%")
-            if "lift_success_rate" in eval_metrics:
-                print(f"    Lift Rate:    {eval_metrics['lift_success_rate']*100:.1f}%")
+            if "place_success_rate" in eval_metrics:
+                print(f"    Place Rate:   {eval_metrics['place_success_rate']*100:.1f}%")
 
             # Check for best model (based on full distribution)
             if eval_metrics["success_rate"] > stats.best_eval_score:
@@ -763,8 +763,8 @@ def train(
     print(f"Final Return:  {final_metrics['avg_return']:.2f}")
     if "attach_rate" in final_metrics:
         print(f"Attach Rate:   {final_metrics['attach_rate']*100:.1f}%")
-    if "lift_success_rate" in final_metrics:
-        print(f"Lift Rate:     {final_metrics['lift_success_rate']*100:.1f}%")
+    if "place_success_rate" in final_metrics:
+        print(f"Place Rate:    {final_metrics['place_success_rate']*100:.1f}%")
 
     # Cleanup
     vec_env.close()

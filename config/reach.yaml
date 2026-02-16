@@ -13,7 +13,7 @@ env:
   max_episode_steps: 200
 
   # Jacobian-transpose guided action (residual RL)
-  # HEAVY: 90% guide initially, slow anneal, keep 10% residual guide forever
+  
   guide:
     enabled: true
     alpha_initial: 0.90    # Heavy guidance — guide does most of the work

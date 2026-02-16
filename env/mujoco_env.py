@@ -25,8 +25,8 @@ class MujocoArmEnv(gym.Env):
     - Wrist joint: pitch around y-axis
 
     Supports two task modes:
-    - "reach": Move end-effector to ball position
-    - "grasp": Attach ball and lift to target height
+    - "reach": Move end-effector to ball on platform
+    - "grasp": Pick ball from source platform, place on destination platform
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
@@ -59,7 +59,7 @@ class MujocoArmEnv(gym.Env):
         w_delta_dist: float = 5.0,  # Delta distance reward weight
         attach_radius: float = 0.04,
         attach_vel_threshold: float = 0.15,
-        lift_height: float = 0.1,
+        place_radius: float = 0.05,
         hold_steps: int = 10,
         # Reward parameters
         reward_config: Optional[dict] = None,
@@ -91,8 +91,8 @@ class MujocoArmEnv(gym.Env):
             ee_vel_threshold: Max ee velocity for reach success
             attach_radius: Distance for grasp attachment
             attach_vel_threshold: Max ee velocity for attachment
-            lift_height: Target lift height for grasp
-            hold_steps: Steps to hold for grasp success
+            place_radius: Distance to destination for place success
+            hold_steps: Steps to hold for success
             reward_config: Optional reward configuration dict
             ball_fell_threshold: Terminate if ball z < table - this
             unreachable_margin: Terminate if dist > max_reach + this
@@ -137,6 +137,12 @@ class MujocoArmEnv(gym.Env):
         self.ids = validate_model(self.model, self.data)
         self.geometry = get_arm_geometry(self.model)
 
+        # Look up platform geom IDs (optional, graceful if missing)
+        self._platform_geom = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, "platform_geom")
+        self._dest_platform_geom = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, "dest_platform")
+
         # For reach task: disable ball collision so it's a phantom target
         # Without this, the arm pushes the ball away on contact, making reach impossible
         if task_mode == "reach":
@@ -144,6 +150,11 @@ class MujocoArmEnv(gym.Env):
             if ball_geom_id >= 0:
                 self.model.geom_contype[ball_geom_id] = 0
                 self.model.geom_conaffinity[ball_geom_id] = 0
+            # Hide destination platform in reach mode
+            if self._dest_platform_geom >= 0:
+                self.model.geom_contype[self._dest_platform_geom] = 0
+                self.model.geom_conaffinity[self._dest_platform_geom] = 0
+                self.model.geom_pos[self._dest_platform_geom] = [0, 0, -1]  # below ground
 
         # Store useful constants
         self.max_reach = self.geometry["max_reach"]
@@ -176,7 +187,7 @@ class MujocoArmEnv(gym.Env):
             task_config = {
                 "attach_radius": attach_radius,
                 "attach_vel_threshold": attach_vel_threshold,
-                "lift_height": lift_height,
+                "place_radius": place_radius,
                 "hold_steps": hold_steps,
                 "table_height": self.table_height,
             }
@@ -207,6 +218,7 @@ class MujocoArmEnv(gym.Env):
         self.step_count = 0
         self.prev_action = None
         self._episode_return = 0.0
+        self._destination_pos = None  # Place target (grasp mode)
 
         # Controller (set externally via set_controller)
         self.controller = None
@@ -268,6 +280,19 @@ class MujocoArmEnv(gym.Env):
         guide = np.clip(guide, -1.0, 1.0)
         return guide.astype(np.float32)
 
+    def _position_platform(self, geom_id: int, ball_pos: np.ndarray):
+        """Position a platform pedestal under the given ball position."""
+        if geom_id < 0:
+            return
+        platform_height = ball_pos[2] - self.table_height - self.ball_radius
+        half_h = max(platform_height / 2.0, 0.005)
+        self.model.geom_pos[geom_id] = [
+            ball_pos[0],
+            ball_pos[1],
+            self.table_height + half_h,
+        ]
+        self.model.geom_size[geom_id] = [0.03, 0.03, half_h]
+
     def reset(
         self,
         *,
@@ -319,10 +344,16 @@ class MujocoArmEnv(gym.Env):
         self._set_ball_position(ball_pos)
         self._ball_spawn_pos = ball_pos.copy()  # Store for pinning in reach mode
 
-        # Reset task state (grasp task needs data for weld constraint)
+        # Position source platform under ball
+        self._position_platform(self._platform_geom, ball_pos)
+
+        # Sample destination and position dest platform (grasp mode)
         if self.task_mode == "grasp":
-            self.task.reset(self.data)
+            self._destination_pos = self._sample_ball_position()
+            self._position_platform(self._dest_platform_geom, self._destination_pos)
+            self.task.reset(self.data, destination_pos=self._destination_pos)
         else:
+            self._destination_pos = None
             self.task.reset()
 
         # Reset episode state
@@ -339,7 +370,8 @@ class MujocoArmEnv(gym.Env):
 
         # Get observation
         attached = self._is_attached()
-        obs = self.obs_builder.get_observation(self.data, attached)
+        obs = self.obs_builder.get_observation(
+            self.data, attached, destination_pos=self._destination_pos)
 
         # Get info
         info = self._get_info()
@@ -417,7 +449,7 @@ class MujocoArmEnv(gym.Env):
             reward, reward_terms, is_success = self.task.compute_reward(
                 dist=dist,
                 ee_vel_magnitude=ee_vel_magnitude,
-                ball_z=ball_z,
+                ball_pos=ball_pos,
                 action=action,
                 prev_action=self.prev_action,
                 joint_vel=joint_vel,
@@ -462,7 +494,8 @@ class MujocoArmEnv(gym.Env):
 
         # Get observation
         attached = self._is_attached()
-        obs = self.obs_builder.get_observation(self.data, attached)
+        obs = self.obs_builder.get_observation(
+            self.data, attached, destination_pos=self._destination_pos)
 
         # Get info
         info = self._get_info()

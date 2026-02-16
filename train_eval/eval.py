@@ -48,8 +48,8 @@ def make_eval_env(config: dict) -> MujocoArmEnv:
         w_delta_dist=env_config.get("reach", {}).get("w_delta_dist", 5.0),
         attach_radius=env_config.get("magnet", {}).get("attach_radius", 0.04),
         attach_vel_threshold=env_config.get("magnet", {}).get("attach_vel_threshold", 0.15),
-        lift_height=env_config.get("lift", {}).get("lift_height", 0.1),
-        hold_steps=env_config.get("lift", {}).get("hold_steps", 10),
+        place_radius=env_config.get("place", {}).get("place_radius", 0.05),
+        hold_steps=env_config.get("place", {}).get("hold_steps", 10),
         # Reward config
         reward_config=reward_config,
         # Termination
@@ -136,7 +136,7 @@ def evaluate(
 
     # Phase 2 specific
     all_attached = []
-    all_lift_success = []
+    all_place_success = []
     all_dropped = []
 
     for i in range(num_episodes):
@@ -169,8 +169,8 @@ def evaluate(
         # Phase 2 metrics
         if "ever_attached" in info:
             all_attached.append(float(info.get("ever_attached", False)))
-        if "lift_success" in info:
-            all_lift_success.append(float(info.get("lift_success", False)))
+        if "place_success" in info:
+            all_place_success.append(float(info.get("place_success", False)))
         if "dropped" in info:
             all_dropped.append(float(info.get("dropped", False)))
 
@@ -196,8 +196,8 @@ def evaluate(
     # Phase 2 metrics
     if len(all_attached) > 0:
         metrics["attach_rate"] = np.mean(all_attached)
-    if len(all_lift_success) > 0:
-        metrics["lift_success_rate"] = np.mean(all_lift_success)
+    if len(all_place_success) > 0:
+        metrics["place_success_rate"] = np.mean(all_place_success)
     if len(all_dropped) > 0:
         metrics["drop_rate"] = np.mean(all_dropped)
 

@@ -262,8 +262,8 @@ def record_evaluation_videos(
         ee_vel_threshold=env_config.get("reach", {}).get("ee_vel_threshold", 0.1),
         attach_radius=env_config.get("magnet", {}).get("attach_radius", 0.04),
         attach_vel_threshold=env_config.get("magnet", {}).get("attach_vel_threshold", 0.15),
-        lift_height=env_config.get("lift", {}).get("lift_height", 0.1),
-        hold_steps=env_config.get("lift", {}).get("hold_steps", 10),
+        place_radius=env_config.get("place", {}).get("place_radius", 0.05),
+        hold_steps=env_config.get("place", {}).get("hold_steps", 10),
         reward_config=reward_config,
     )
     env.create_controller_from_config(control_config)

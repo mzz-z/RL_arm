@@ -8,3 +8,32 @@ train_eval.md
 
 # Claude Code
 .claude/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Demo artifacts
+demo.py
+demo_videos/
+
+# MuJoCo logs
+MUJOCO_LOG.TXT
+
+# Windows artifacts
+nul
+
+# Training runs (large checkpoints + logs)
+runs/
+
+# Videos
+*.mp4
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

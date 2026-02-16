@@ -1,9 +1,9 @@
-# grasp.yaml - Phase 2 configuration (grasp + lift task)
+# grasp.yaml - Phase 2 configuration (pick-and-place task)
 # Inherits from default.yaml, overrides specific values.
 
 env:
   task_mode: "grasp"
-  max_episode_steps: 300      # More time for grasp + lift
+  max_episode_steps: 300      # More time for grasp + transport + place
 
   # Initial joint state (same as reach training)
   init_joints:
@@ -18,17 +18,20 @@ env:
     attach_radius: 0.06        # Generous for demo (default 0.04)
     attach_vel_threshold: 999.0  # Effectively disabled — velocity gate blocks learning
 
-  # Relaxed lift/hold for demo
-  lift:
-    lift_height: 0.08          # Slightly lower than default (0.1)
+  # Place parameters
+  place:
+    place_radius: 0.05        # Distance to destination for success
     hold_steps: 5              # Shorter hold than default (10)
 
 reward:
   grasp:
     w_dist: 1.0
     attach_bonus: 5.0          # Bigger bonus to incentivize attachment
-    w_lift: 2.0                # Stronger lift signal
-    w_hold_per_step: 0.2       # More reward for holding
+    w_place_dist: 2.0          # Stronger transport signal
+    w_place_proximity: 0.5
+    place_proximity_alpha: 5.0
+    place_bonus: 5.0
+    w_hold_per_step: 0.2       # More reward for holding at destination
     success_bonus: 15.0
   # Action penalties (same as reach)
   w_action_mag: 0.01

@@ -24,7 +24,7 @@ class TrainingStats:
 
     # Phase 2 specific
     recent_attach_rate: deque = field(default_factory=lambda: deque(maxlen=100))
-    recent_lift_success: deque = field(default_factory=lambda: deque(maxlen=100))
+    recent_place_success: deque = field(default_factory=lambda: deque(maxlen=100))
     recent_drop_rate: deque = field(default_factory=lambda: deque(maxlen=100))
 
 
@@ -131,8 +131,8 @@ class Logger:
         # Phase 2 metrics
         if len(stats.recent_attach_rate) > 0:
             self.log("train/attach_rate", np.mean(stats.recent_attach_rate), step)
-        if len(stats.recent_lift_success) > 0:
-            self.log("train/lift_success_rate", np.mean(stats.recent_lift_success), step)
+        if len(stats.recent_place_success) > 0:
+            self.log("train/place_success_rate", np.mean(stats.recent_place_success), step)
         if len(stats.recent_drop_rate) > 0:
             self.log("train/drop_rate", np.mean(stats.recent_drop_rate), step)
 
@@ -192,8 +192,8 @@ class Logger:
         if len(stats.recent_attach_rate) > 0:
             print(f"\nPhase 2 Metrics:")
             print(f"  Attach:     {np.mean(stats.recent_attach_rate)*100:.1f}%")
-        if len(stats.recent_lift_success) > 0:
-            print(f"  Lift:       {np.mean(stats.recent_lift_success)*100:.1f}%")
+        if len(stats.recent_place_success) > 0:
+            print(f"  Place:       {np.mean(stats.recent_place_success)*100:.1f}%")
 
         if eval_metrics:
             print(f"\nEvaluation:")
